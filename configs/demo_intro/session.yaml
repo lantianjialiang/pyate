@@ -1,0 +1,30 @@
+name: demo_intro
+description: 'Short walkthrough: pattern debug, a breakpoint, and a small shmoo'
+includes: []
+program: testprogram.yaml
+tester: ../demo_cp/tester.yaml
+channel_map: ../demo_cp/channel_map.yaml
+loadboard: ../demo_cp/loadboard.yaml
+levels: ../demo_cp/levels.yaml
+timing: ../demo_cp/timing.yaml
+limits: limits.csv
+binning: ../demo_cp/binning.yaml
+dut_profile: dut_profile.yaml
+wafer: wafer.yaml
+lot: lot.yaml
+prober: prober.yaml
+handler: null
+stdf: ../demo_cp/stdf_options.yaml
+run:
+  stage: CP1
+  sites: 3
+  seed: 7
+  temperature: null
+  output_dir: out
+  parallel_mode: sequential
+  disabled_sites: []
+  stop_on_fail: false
+  retest_bins: []
+  max_retries: 0
+  only: []
+  skip: []

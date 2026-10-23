@@ -1,0 +1,8 @@
+lot_id: LOT-INTRO
+sublot: A
+wafers:
+- W01
+flow:
+- CP1
+trays: 0
+parts_per_tray: 0

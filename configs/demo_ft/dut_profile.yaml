@@ -1,0 +1,20 @@
+model: composite
+params:
+  counter_bits: 8
+  shift_bits: 8
+defects: []
+yield:
+  pass: 0.9
+  edge_fail_boost: 1.8
+  cluster_prob: 0.03
+  defect_mix:
+    stuck_at: 0.42
+    open: 0.18
+    short: 0.14
+    leakage: 0.12
+    high_idd: 0.09
+    slow: 0.05
+process:
+  vth_sigma: 0.015
+  idd_sigma: 0.03
+  leak_sigma: 0.12

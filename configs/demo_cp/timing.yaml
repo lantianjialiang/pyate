@@ -1,0 +1,16 @@
+default_set: tset_fast
+sets:
+- name: tset_fast
+  period_ns: 50.0
+  edges:
+    drive_on: 0.0
+    data: 5.0
+    return: 0.0
+    compare: 35.0
+- name: tset_slow
+  period_ns: 100.0
+  edges:
+    drive_on: 0.0
+    data: 5.0
+    return: 0.0
+    compare: 70.0

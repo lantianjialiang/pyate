@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyate"
+version = "0.1.0"
+description = "PyATE - offline ATE (Automatic Test Equipment) simulator"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pydantic>=2.5",
+    "PyYAML>=6.0",
+    "pluggy>=1.3",
+]
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.5"]
+dev = ["PySide6>=6.5", "pytest>=7.4", "pystdf>=1.4"]
+
+[project.scripts]
+pyate = "pyate.cli.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501", "B008", "RUF012"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011", "SIM117"]
+"tools/**" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src/pyate"]
+warn_unused_ignores = false
+
+[[tool.mypy.overrides]]
+module = ["yaml.*", "pystdf.*", "pluggy.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["pyate"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]

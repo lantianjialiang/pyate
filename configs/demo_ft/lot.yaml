@@ -1,0 +1,7 @@
+lot_id: LOT-FT-0001
+sublot: B
+wafers: []
+flow:
+- FT1
+trays: 2
+parts_per_tray: 500

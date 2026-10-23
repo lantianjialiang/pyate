@@ -1,0 +1,66 @@
+pins:
+- pin: VDD
+  type: power
+  sites:
+    1: 1
+    2: 33
+- pin: VSS
+  type: power
+  sites:
+    1: 2
+    2: 34
+- pin: CLK
+  type: in
+  sites:
+    1: 3
+    2: 35
+- pin: START
+  type: in
+  sites:
+    1: 4
+    2: 36
+- pin: RDY
+  type: out
+  sites:
+    1: 5
+    2: 37
+- pin: D0
+  type: out
+  sites:
+    1: 6
+    2: 38
+- pin: D1
+  type: out
+  sites:
+    1: 7
+    2: 39
+- pin: D2
+  type: out
+  sites:
+    1: 8
+    2: 40
+- pin: D3
+  type: out
+  sites:
+    1: 9
+    2: 41
+- pin: D4
+  type: out
+  sites:
+    1: 10
+    2: 42
+- pin: D5
+  type: out
+  sites:
+    1: 11
+    2: 43
+- pin: D6
+  type: out
+  sites:
+    1: 12
+    2: 44
+- pin: D7
+  type: out
+  sites:
+    1: 13
+    2: 45

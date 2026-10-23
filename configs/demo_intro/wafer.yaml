@@ -1,0 +1,10 @@
+diameter_mm: 40.0
+die_size_mm:
+- 8.0
+- 8.0
+edge_exclusion_mm: 2.0
+notch: bottom
+center_die:
+- 0
+- 0
+skip_list: []

@@ -1,0 +1,44 @@
+program: INTRO
+revision: '1.0'
+flows:
+  CP1:
+  - item: idd_static
+    test_num: 2000
+    params:
+      fail_code: 4
+    on_fail:
+      action: continue
+      bin: 4
+      max_retries: 0
+  - item: functional
+    test_num: 3000
+    params:
+      pattern: cnt_basic.pat
+      max_cycles: 64
+      fail_code: 6
+    on_fail:
+      action: continue
+      bin: 6
+      max_retries: 0
+  - item: delay_ms
+    test_num: 9000
+    params:
+      ms: 1
+    on_fail:
+      action: continue
+      max_retries: 0
+  - item: shmoo
+    test_num: 9100
+    params:
+      pattern: cnt_basic.pat
+      vdd_min: 2.7
+      vdd_max: 3.6
+      vdd_steps: 3
+      period_min_ns: 10
+      period_max_ns: 80
+      period_steps: 3
+      cycles: 8
+      min_pass_rate: 0
+    on_fail:
+      action: continue
+      max_retries: 0

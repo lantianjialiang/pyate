@@ -1,0 +1,9 @@
+test_num,name,lo,hi,unit,scale,stage,temp_min,temp_max
+1100,leakage_il/ih,,2.5e-07,A,0,*,-999.0,999.0
+2000,idd_static,0.0,0.00026,A,0,*,0.0,999.0
+2100,idd_dynamic,0.0,0.005,A,0,*,0.0,999.0
+3000,functional_cnt,,,,0,*,-999.0,999.0
+3100,functional_loop,,,,0,*,-999.0,999.0
+4000,fmax,60.0,,MHz,0,*,-999.0,999.0
+4100,vdd_min,,3.05,V,0,*,-999.0,999.0
+9000,delay,,,ms,0,*,-999.0,999.0

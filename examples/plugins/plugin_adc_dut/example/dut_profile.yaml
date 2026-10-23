@@ -1,0 +1,19 @@
+model: adc
+params:
+  bits: 8
+  vref: 3.3
+  inl_lsb: 0.6
+  dnl_lsb: 0.25
+defects: []
+yield:
+  pass: 0.92
+  edge_fail_boost: 1.0
+  cluster_prob: 0.02
+  defect_mix:
+    stuck_at: 0.5
+    open: 0.2
+    leakage: 0.3
+process:
+  vth_sigma: 0.01
+  idd_sigma: 0.03
+  leak_sigma: 0.1

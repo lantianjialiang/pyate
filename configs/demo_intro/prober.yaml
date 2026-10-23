@@ -1,0 +1,8 @@
+index_time_ms: 20.0
+layout:
+  cols: 1
+  rows: 1
+wafer_change_time_s: 0.0
+contact_fail_prob: 0.0
+temperature: 25.0
+scan: serpentine

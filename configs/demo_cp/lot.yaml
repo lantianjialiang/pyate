@@ -1,0 +1,11 @@
+lot_id: LOT-CP-0001
+sublot: A
+wafers:
+- W01
+- W02
+flow:
+- CP1
+- CP2
+- FT1
+trays: 0
+parts_per_tray: 0

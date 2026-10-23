@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plugin-adc-dut"
+version = "0.1.0"
+description = "Reference pyate plugin: ADC DUT model + INL/DNL test items"
+requires-python = ">=3.10"
+dependencies = ["pyate>=0.1"]
+
+[project.entry-points."pyate.plugins"]
+plugin_adc_dut = "plugin_adc_dut:Plugin"
+
+[tool.setuptools]
+packages = ["plugin_adc_dut"]

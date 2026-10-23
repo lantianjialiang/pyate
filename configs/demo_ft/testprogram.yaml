@@ -1,0 +1,35 @@
+program: DEMO_CNT8_FT
+revision: '1.0'
+flows:
+  FT1:
+  - item: continuity
+    test_num: 1000
+    params:
+      fail_code: 2
+    on_fail:
+      action: stop
+      bin: 2
+  - item: idd_static
+    test_num: 2000
+    params:
+      fail_code: 4
+    on_fail:
+      action: continue
+  - item: functional
+    test_num: 3000
+    params:
+      pattern: cnt_basic.pat
+      fail_code: 6
+    on_fail:
+      action: continue
+  - item: fmax_search
+    test_num: 4000
+    params:
+      pattern: cnt_loop.pat
+      period_min_ns: 4.0
+      period_max_ns: 100.0
+      resolution_ns: 2.0
+      cycles: 128
+      fail_code: 7
+    on_fail:
+      action: continue
