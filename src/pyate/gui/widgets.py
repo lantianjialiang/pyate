@@ -65,15 +65,15 @@ class WaferMapWidget(QWidget):
                       float(side), float(side))
         painter.fillRect(self.rect(), QColor(palette["bg"]))
         outline = self._outline(area)
-        painter.setPen(QPen(QColor(palette["outline"]), 2))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawPath(outline)
         if not self._dies:
+            painter.setPen(QPen(QColor(palette["outline"]), 2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(outline)
             painter.setPen(QColor(palette["muted"]))
             painter.drawText(area, Qt.AlignCenter, "no data")
             return
-        painter.setClipPath(outline)
-        # die coordinates are grid indices, so the pitch is one die size
+        # Each die stays a full rectangle. The circle is only an outline,
+        # drawn after the dice so a die on the rim is not cut into a polygon.
         scale = side / self._wafer_size
         cell = max(1.0, self._die_size * scale)
         colors = bins_colors()
@@ -82,10 +82,13 @@ class WaferMapWidget(QWidget):
         for (x, y), soft_bin in self._dies.items():
             px = cx + x * cell - cell / 2.0
             py = cy - y * cell - cell / 2.0
-            rect = QRectF(px, py, cell - 0.5, cell - 0.5)
-            painter.fillRect(rect, QColor(colors.get(soft_bin, "#7f8c8d")))
-            hits.append((rect, int(x), int(y), int(soft_bin)))
+            die = QRectF(px, py, cell - 0.5, cell - 0.5)
+            painter.fillRect(die, QColor(colors.get(soft_bin, "#7f8c8d")))
+            hits.append((die, int(x), int(y), int(soft_bin)))
         self._hits = hits
+        painter.setPen(QPen(QColor(palette["outline"]), 2))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(outline)
         painter.setPen(QColor(palette["muted"]))
         font = QFont()
         font.setPointSize(8)
@@ -324,13 +327,121 @@ class ShmooWidget(QWidget):
                                  Qt.AlignRight | Qt.AlignVCenter, label)
 
 
-class HistogramWidget(QWidget):
-    """Bar chart of ``(low, high, count)`` bins."""
+_LO_COLOR = "#d4880f"
+_HI_COLOR = "#c0392b"
+
+
+def _chart_span(low: float, high: float,
+                lo: float | None, hi: float | None) -> tuple[float, float]:
+    """Axis range that still shows the data and any spec limits."""
+    values = [low, high]
+    if lo is not None:
+        values.append(lo)
+    if hi is not None:
+        values.append(hi)
+    start, end = min(values), max(values)
+    if start == end:
+        pad = abs(start) * 0.08 or 1.0
+        return start - pad, end + pad
+    pad = (end - start) * 0.06
+    return start - pad, end + pad
+
+
+def _limit_note(lo: float | None, hi: float | None) -> str:
+    """One line naming the spec limits, for a tooltip."""
+    parts: list[str] = []
+    if lo is not None:
+        parts.append(f"lo {lo:.4g}")
+    if hi is not None:
+        parts.append(f"hi {hi:.4g}")
+    return "   ".join(parts)
+
+
+class _StatChart(QWidget):
+    """Shared lower/high limit lines and hover text for the summary charts."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._lo: float | None = None
+        self._hi: float | None = None
+        self._lo_pos: float | None = None
+        self._hi_pos: float | None = None
+        self._hits: list[tuple[Any, ...]] = []
+        self.setMouseTracking(True)
+        self.setMinimumHeight(110)
+
+    def set_limits(self, lo: float | None, hi: float | None) -> None:
+        """Draw these spec limits. ``None`` means that side is unbounded."""
+        self._lo = None if lo is None else float(lo)
+        self._hi = None if hi is None else float(hi)
+        self.update()
+
+    def leaveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        QToolTip.hideText()
+        super().leaveEvent(event)
+
+    def _clear_hits(self) -> None:
+        self._lo_pos = None
+        self._hi_pos = None
+        self._hits = []
+
+    def _tip(self, event: Any, text: str) -> None:
+        if text:
+            QToolTip.showText(event.globalPosition().toPoint(), text, self)
+        else:
+            QToolTip.hideText()
+
+    def _limit_hit(self, x: float, y: float, *, vertical: bool) -> str:
+        if vertical:
+            if self._lo is not None and self._lo_pos is not None and abs(x - self._lo_pos) <= 6:
+                return f"lower limit\n{self._lo:.6g}"
+            if self._hi is not None and self._hi_pos is not None and abs(x - self._hi_pos) <= 6:
+                return f"high limit\n{self._hi:.6g}"
+            return ""
+        if self._lo is not None and self._lo_pos is not None and abs(y - self._lo_pos) <= 6:
+            return f"lower limit\n{self._lo:.6g}"
+        if self._hi is not None and self._hi_pos is not None and abs(y - self._hi_pos) <= 6:
+            return f"high limit\n{self._hi:.6g}"
+        return ""
+
+    def _draw_vlimit(self, painter: QPainter, x: float, top: float, bottom: float,
+                     color: str, label: str) -> None:
+        painter.setPen(QPen(QColor(color), 1.2, Qt.DashLine))
+        painter.drawLine(QPointF(x, top), QPointF(x, bottom))
+        painter.setPen(QColor(color))
+        painter.drawText(QRectF(x - 22, top, 44, 12), Qt.AlignHCenter | Qt.AlignTop, label)
+
+    def _draw_hlimit(self, painter: QPainter, y: float, left: float, right: float,
+                     color: str, label: str) -> None:
+        painter.setPen(QPen(QColor(color), 1.2, Qt.DashLine))
+        painter.drawLine(QPointF(left, y), QPointF(right, y))
+        painter.setPen(QColor(color))
+        painter.drawText(QRectF(left + 2, y - 12, 36, 12), Qt.AlignLeft | Qt.AlignVCenter, label)
+
+    def _paint_limits(self, painter: QPainter, *, vertical: bool,
+                      place: Any, top: float, bottom: float, left: float, right: float) -> None:
+        if self._lo is not None:
+            pos = place(self._lo)
+            self._lo_pos = pos
+            if vertical:
+                self._draw_vlimit(painter, pos, top, bottom, _LO_COLOR, "L")
+            else:
+                self._draw_hlimit(painter, pos, left, right, _LO_COLOR, "L")
+        if self._hi is not None:
+            pos = place(self._hi)
+            self._hi_pos = pos
+            if vertical:
+                self._draw_vlimit(painter, pos, top, bottom, _HI_COLOR, "H")
+            else:
+                self._draw_hlimit(painter, pos, left, right, _HI_COLOR, "H")
+
+
+class HistogramWidget(_StatChart):
+    """Bar chart of ``(low, high, count)`` bins, with optional spec limits."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._bins: list[tuple[float, float, int]] = []
-        self.setMinimumHeight(110)
 
     def set_bins(self, bins: list[tuple[float, float, int]]) -> None:
         """Replace the histogram and repaint."""
@@ -338,6 +449,7 @@ class HistogramWidget(QWidget):
         self.update()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))
@@ -346,30 +458,58 @@ class HistogramWidget(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "no histogram")
             return
         peak = max(count for _lo, _hi, count in self._bins) or 1
-        left, top, right, bottom = 8, 8, 8, 18
+        data_low = min(low for low, _high, _count in self._bins)
+        data_high = max(high for _low, high, _count in self._bins)
+        axis_low, axis_high = _chart_span(data_low, data_high, self._lo, self._hi)
+        left, top, right, bottom = 8.0, 16.0, 8.0, 18.0
         width = max(1.0, self.width() - left - right)
         height = max(1.0, self.height() - top - bottom)
-        span = width / len(self._bins)
+        span = axis_high - axis_low or 1.0
+
+        def x_of(value: float) -> float:
+            return left + width * (value - axis_low) / span
+
         font = QFont()
         font.setPointSize(7)
         painter.setFont(font)
-        for index, (low, _high, count) in enumerate(self._bins):
+        for low, high, count in self._bins:
+            x0 = x_of(low)
+            x1 = max(x0 + 1.0, x_of(high))
             bar = height * count / peak
-            rect = QRectF(left + index * span + 1, top + height - bar, max(1.0, span - 2), bar)
+            rect = QRectF(x0 + 0.5, top + height - bar, max(1.0, x1 - x0 - 1.0), bar)
             painter.fillRect(rect, QColor("#4b84f0"))
-            if index in (0, len(self._bins) - 1):
-                painter.setPen(QColor(palette["muted"]))
-                painter.drawText(QRectF(rect.left() - 8, top + height, span + 16, 16),
-                                 Qt.AlignCenter, f"{low:.3g}")
+            self._hits.append((x0, x1, low, high, count))
+        painter.setPen(QColor(palette["muted"]))
+        painter.drawText(QRectF(left, top + height, 64, 16), Qt.AlignLeft, f"{data_low:.3g}")
+        painter.drawText(QRectF(left + width - 64, top + height, 64, 16), Qt.AlignRight,
+                         f"{data_high:.3g}")
+        self._paint_limits(painter, vertical=True, place=x_of,
+                           top=top, bottom=top + height, left=left, right=left + width)
+        note = _limit_note(self._lo, self._hi)
+        if note:
+            painter.setPen(QColor(palette["muted"]))
+            painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, note)
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        x = event.position().x()
+        text = self._limit_hit(x, event.position().y(), vertical=True)
+        if not text:
+            for left, right, low, high, count in self._hits:
+                if left <= x <= right:
+                    text = f"{low:.4g} .. {high:.4g}\ncount {count}"
+                    note = _limit_note(self._lo, self._hi)
+                    if note:
+                        text = f"{text}\n{note}"
+                    break
+        self._tip(event, text)
 
 
-class TrendWidget(QWidget):
+class TrendWidget(_StatChart):
     """Polyline of the most recent measurements of one test."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._values: list[float] = []
-        self.setMinimumHeight(110)
 
     def set_values(self, values: list[float]) -> None:
         """Replace the series and repaint."""
@@ -377,6 +517,7 @@ class TrendWidget(QWidget):
         self.update()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -385,36 +526,62 @@ class TrendWidget(QWidget):
             painter.setPen(QColor(palette["muted"]))
             painter.drawText(self.rect(), Qt.AlignCenter, "no trend")
             return
-        low = min(self._values)
-        high = max(self._values)
-        span = high - low or 1.0
-        left, top, right, bottom = 8.0, 8.0, 8.0, 8.0
+        axis_low, axis_high = _chart_span(min(self._values), max(self._values), self._lo, self._hi)
+        span = axis_high - axis_low or 1.0
+        left, top, right, bottom = 8.0, 16.0, 8.0, 8.0
         width = max(1.0, self.width() - left - right)
         height = max(1.0, self.height() - top - bottom)
+
+        def y_of(value: float) -> float:
+            return top + height * (1.0 - (value - axis_low) / span)
+
         painter.setPen(QPen(QColor("#4b84f0"), 1.6))
         previous: QPointF | None = None
         for index, value in enumerate(self._values):
             x = left + width * index / (len(self._values) - 1)
-            y = top + height * (1.0 - (value - low) / span)
-            point = QPointF(x, y)
+            point = QPointF(x, y_of(value))
             if previous is not None:
                 painter.drawLine(previous, point)
             previous = point
+            self._hits.append((x, point.y(), index, value))
+        self._paint_limits(painter, vertical=False, place=y_of,
+                           top=top, bottom=top + height, left=left, right=left + width)
         painter.setPen(QColor(palette["muted"]))
         font = QFont()
         font.setPointSize(7)
         painter.setFont(font)
-        painter.drawText(QRectF(4, 2, self.width() - 8, 14), Qt.AlignRight,
-                         f"{low:.3g} .. {high:.3g}")
+        note = _limit_note(self._lo, self._hi)
+        caption = f"{min(self._values):.3g} .. {max(self._values):.3g}"
+        if note:
+            caption = f"{caption}    {note}"
+        painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, caption)
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        x = event.position().x()
+        y = event.position().y()
+        text = self._limit_hit(x, y, vertical=False)
+        if not text and self._hits:
+            nearest: tuple[int, float] | None = None
+            best = 14.0
+            for px, py, index, value in self._hits:
+                dist = math.hypot(px - x, py - y)
+                if dist <= best:
+                    best = dist
+                    nearest = (index, value)
+            if nearest is not None:
+                text = f"#{nearest[0] + 1}\nvalue {nearest[1]:.6g}"
+                note = _limit_note(self._lo, self._hi)
+                if note:
+                    text = f"{text}\n{note}"
+        self._tip(event, text)
 
 
-class ProbabilityWidget(QWidget):
+class ProbabilityWidget(_StatChart):
     """Normal probability plot: measurement on X, standard-normal z on Y."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._points: list[tuple[float, float]] = []
-        self.setMinimumHeight(110)
 
     def set_points(self, points: list[tuple[float, float]]) -> None:
         """Replace the ``(value, z)`` series and repaint."""
@@ -422,6 +589,7 @@ class ProbabilityWidget(QWidget):
         self.update()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -432,16 +600,17 @@ class ProbabilityWidget(QWidget):
             return
         xs = [point[0] for point in self._points]
         zs = [point[1] for point in self._points]
-        low_x, high_x = min(xs), max(xs)
+        data_low, data_high = min(xs), max(xs)
+        axis_low, axis_high = _chart_span(data_low, data_high, self._lo, self._hi)
         low_z, high_z = min(zs), max(zs)
-        span_x = high_x - low_x or 1.0
+        span_x = axis_high - axis_low or 1.0
         span_z = high_z - low_z or 1.0
-        left, top, right, bottom = 28.0, 8.0, 8.0, 16.0
+        left, top, right, bottom = 28.0, 16.0, 8.0, 16.0
         width = max(1.0, self.width() - left - right)
         height = max(1.0, self.height() - top - bottom)
 
         def px(value: float) -> float:
-            return left + width * (value - low_x) / span_x
+            return left + width * (value - axis_low) / span_x
 
         def py(z: float) -> float:
             return top + height * (1.0 - (z - low_z) / span_z)
@@ -451,21 +620,47 @@ class ProbabilityWidget(QWidget):
         stdev = math.sqrt(var) if var > 0 else 0.0
         painter.setPen(QPen(QColor(palette["muted"]), 1.0, Qt.DashLine))
         if stdev > 0:
-            z0 = (low_x - mean) / stdev
-            z1 = (high_x - mean) / stdev
-            painter.drawLine(QPointF(px(low_x), py(z0)), QPointF(px(high_x), py(z1)))
+            z0 = (data_low - mean) / stdev
+            z1 = (data_high - mean) / stdev
+            painter.drawLine(QPointF(px(data_low), py(z0)), QPointF(px(data_high), py(z1)))
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor("#4b84f0"))
         for value, z in self._points:
-            painter.drawEllipse(QPointF(px(value), py(z)), 2.2, 2.2)
+            point = QPointF(px(value), py(z))
+            painter.drawEllipse(point, 2.2, 2.2)
+            self._hits.append((point.x(), point.y(), value, z))
+        self._paint_limits(painter, vertical=True, place=px,
+                           top=top, bottom=top + height, left=left, right=left + width)
         painter.setPen(QColor(palette["muted"]))
         font = QFont()
         font.setPointSize(7)
         painter.setFont(font)
         painter.drawText(QRectF(4, self.height() - 14, self.width() - 8, 12), Qt.AlignLeft,
-                         f"{low_x:.3g}")
+                         f"{data_low:.3g}")
         painter.drawText(QRectF(4, self.height() - 14, self.width() - 8, 12), Qt.AlignRight,
-                         f"{high_x:.3g}")
+                         f"{data_high:.3g}")
+        note = _limit_note(self._lo, self._hi)
+        if note:
+            painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, note)
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        x = event.position().x()
+        y = event.position().y()
+        text = self._limit_hit(x, y, vertical=True)
+        if not text and self._hits:
+            nearest: tuple[float, float] | None = None
+            best = 14.0
+            for px, py, value, z in self._hits:
+                dist = math.hypot(px - x, py - y)
+                if dist <= best:
+                    best = dist
+                    nearest = (value, z)
+            if nearest is not None:
+                text = f"value {nearest[0]:.6g}\nz {nearest[1]:.3f}"
+                note = _limit_note(self._lo, self._hi)
+                if note:
+                    text = f"{text}\n{note}"
+        self._tip(event, text)
 
 
 class TrayWidget(QWidget):

@@ -66,7 +66,8 @@ class ConfigViewModel:
         except ConfigProblem as exc:
             return [{"label": f"<error: {exc}>", "children": []}]
         loaded = self.session.loaded
-        return [
+        patterns = self.pattern_files()
+        nodes: list[dict[str, Any]] = [
             {"label": f"session: {info.name}", "children": [
                 {"label": f"path: {info.path}", "children": []},
                 {"label": f"stage: {info.stage}", "children": []},
@@ -98,14 +99,29 @@ class ConfigViewModel:
                 {"label": f"soft bins: {len(loaded.binning.soft_bins)}", "children": []},
                 {"label": f"hard bins: {len(loaded.binning.hard_bins)}", "children": []},
             ]},
-            {"label": "files", "children": [
+        ]
+        if patterns:
+            nodes.append({"label": "patterns", "children": [
+                {"label": f"{item['name']}: {item['summary']}" if item["summary"] else item["name"],
+                 "pattern_path": item["path"],
+                 "note": item["note"],
+                 "children": []}
+                for item in patterns
+            ]})
+        nodes.append({"label": "files", "children": [
                 {"label": f"{key}: {value}", "file_key": key, "children": []}
                 for key, value in sorted(loaded.files.items())
             ] + [
                 {"label": f"session: {loaded.path}", "file_key": "session", "children": []},
                 {"label": f"run: {loaded.path}", "file_key": "run", "children": []},
-            ]},
-        ]
+            ]})
+        return nodes
+
+    def pattern_files(self) -> list[dict[str, str]]:
+        """``.pat`` files next to the session, with the leading comment as a note."""
+        if self.session is None:
+            return []
+        return self.session.pattern_files()
 
     def flow_tree(self, stage: str | None = None) -> list[dict[str, Any]]:
         """Flow tree of one stage."""

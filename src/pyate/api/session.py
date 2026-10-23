@@ -38,7 +38,12 @@ from ..config.models import (
     TimingConfig,
     WaferConfig,
 )
-from ..config.validators import ValidationReport, validate_session
+from ..config.validators import (
+    ValidationReport,
+    iter_flow_items,
+    resolve_pattern_path,
+    validate_session,
+)
 
 __all__ = ["Session", "SessionInfo", "ConfigProblem", "FileDocument", "SaveResult"]
 
@@ -308,6 +313,41 @@ class Session:
         """Resolved configuration snapshot (``run_snapshot.yaml`` content)."""
         return self.load().to_snapshot()
 
+    def pattern_files(self) -> list[dict[str, str]]:
+        """``.pat`` files for this session, with the leading comment as a note.
+
+        Every file in ``patterns/`` is included, including one the flow never
+        calls. The intro failure example stays next to the pattern that passes.
+        """
+        loaded = self.load()
+        found: dict[str, Path] = {}
+        directory = loaded.root / "patterns"
+        if directory.is_dir():
+            for path in sorted(directory.glob("*.pat")):
+                found[path.name] = path.resolve()
+        referenced: set[str] = set()
+        for nodes in loaded.program.flows.values():
+            for node in iter_flow_items(nodes):
+                name = node.params.get("pattern")
+                if not name:
+                    continue
+                referenced.add(Path(str(name)).name)
+                resolved = resolve_pattern_path(loaded, str(name))
+                if resolved is not None:
+                    found.setdefault(resolved.name, resolved)
+        rows: list[dict[str, str]] = []
+        for name in sorted(found):
+            path = found[name]
+            summary, note = _pattern_comment(path)
+            if not summary:
+                if name in referenced:
+                    summary = "测试程序引用的向量"
+                else:
+                    summary = "未放进 flow，可在 Pattern 页单独运行"
+                note = summary
+            rows.append({"name": name, "path": str(path), "summary": summary, "note": note})
+        return rows
+
     # ------------------------------------------------------------- file edit
     def file_keys(self) -> list[str]:
         """Keys the editor can open (referenced files, plus session and run)."""
@@ -491,6 +531,28 @@ class Session:
         if not parent_path:
             return flows[stage]
         return _children_of(self._node_at(stage, parent_path))
+
+
+def _pattern_comment(path: Path) -> tuple[str, str]:
+    """Leading ``#`` lines of a pattern file: a one-line summary and the full note."""
+    lines: list[str] = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "", ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            if lines:
+                break
+            continue
+        if stripped.startswith("#"):
+            lines.append(stripped[1:].strip())
+            continue
+        break
+    if not lines:
+        return "", ""
+    return lines[0], "\n".join(lines)
 
 
 def _children_of(node: FlowNode) -> list[Any]:

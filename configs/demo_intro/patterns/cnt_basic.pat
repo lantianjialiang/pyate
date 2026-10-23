@@ -1,3 +1,5 @@
+# 通过示例。每一拍的 SO、Q、S 都按 composite 模型时钟后的输出来写。
+# 失败示例 cnt_fail.pat 只改了一处：复位后第一拍 SI=1 时，SO 写成了 H，实际仍是 L。
 pattern cnt_basic;
 pins    CLK, RSTN, EN, SI, SO, Q0, Q1, Q2, Q3, Q4, Q5, Q6, Q7, S0, S1, S2, S3, S4, S5, S6, S7;
 timing  tset_fast;

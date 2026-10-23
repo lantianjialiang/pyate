@@ -127,7 +127,7 @@ QToolTip { background: #ffffff; color: #1c1f23; border: 1px solid #ccd2d8; }
 """
 
 
-def stylesheet(theme: str = "dark") -> str:
+def stylesheet(theme: str = "light") -> str:
     """Return the style sheet of ``theme`` (``dark`` or ``light``)."""
     light = str(theme).lower() == "light"
     base = DARK if not light else LIGHT
@@ -143,7 +143,7 @@ _CANVAS: dict[str, dict[str, str]] = {
     "light": {"bg": "#ffffff", "text": "#33393f", "muted": "#7b848d", "outline": "#b9c0c8"},
 }
 
-_canvas_theme = "dark"
+_canvas_theme = "light"
 
 
 def set_theme(theme: str) -> str:

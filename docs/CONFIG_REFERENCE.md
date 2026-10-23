@@ -65,17 +65,25 @@ run:
 
 ```yaml
 pins:
-  - {pin: VDD, type: dps,   channel: 1}
-  - {pin: CLK, type: digital, channel: 3}
-  - {pin: Q[0:7], type: digital, channel: 10, width: 8}   # 总线一次声明 8 位
+  - pin: VDD
+    type: power
+    sites: {1: 1, 2: 3}
+  - pin: CLK
+    type: in
+    sites: {1: 3, 2: 51}
+  - pin: Q[0:7]
+    type: out
+    channel: 10
 ```
 
-`type` ∈ `dps|pmu|digital|relay`。总线写法 `NAME[0:N]` 会展开成 `N+1` 个 pin，**bit0 在最左**；
-`width` 必须与范围一致。通道号在同一类型内不可重复（资源冲突直接报错）。
+`type` ∈ `in|out|io|power`。`sites` 给出每个 site 的起始通道；不写 `sites` 时所有 site 共用 `channel`。
+总线写法 `NAME[lo:hi]` 会展开成 `hi-lo+1` 个 pin（`Q0` … `Q7`），通道号为起始通道加 bit 下标。
+同一个 site 上通道号不能重复。`power` 还要落在 `1..tester.dps_channels`，并且跨 site 也不能共用同一路 DPS；
+其余 pin 落在 `1..tester.digital_channels`。
 
 ## loadboard / levels / timing
 
-- `loadboard`：`board_id`、`site_count`、`pin_to_channel`（按 site 复用通道）、`relay_map`。
+- `loadboard`：`board_id`、`site_count`、`relay_map`。pin 到通道的对应只写在 `channel_map`。
 - `levels`：`default_set` + `sets[]`，每个 set 含 `vil/vih/vol/voh/vterm/iol/ioh/vdd`。
 - `timing`：`default_set` + `sets[]`，每个 set 含 `period_ns` 与 `edges`（`drive_on/data/return_/compare`，单位 ns）。
 

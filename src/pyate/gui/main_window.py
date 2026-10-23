@@ -18,7 +18,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..api import ConfigProblem, EventBus, Session
+from .app import application_icon
 from .panels import BatchPanel, ConfigPanel, FlowPanel, LimitsPanel, PatternPanel, RunPanel
+from .stdf_panel import StdfPanel
 from .theme import set_theme as set_canvas_theme, stylesheet
 from .viewmodels import BatchViewModel, ConfigViewModel, RunViewModel
 
@@ -29,8 +31,9 @@ class MainWindow(QMainWindow):
     """The pyate GUI shell: one tab per workflow step."""
 
     def __init__(self, session_path: str | Path | None = None,
-                 *, theme: str = "dark") -> None:
+                 *, theme: str = "light") -> None:
         super().__init__()
+        self.setWindowIcon(application_icon())
         self.setWindowTitle("pyate - ATE simulator")
         self.resize(1280, 800)
         self.setMinimumSize(1024, 640)
@@ -48,13 +51,15 @@ class MainWindow(QMainWindow):
         self.run_panel = RunPanel(self.run_vm)
         self.batch_panel = BatchPanel(self.batch_vm)
         self.pattern_panel = PatternPanel()
+        self.stdf_panel = StdfPanel()
 
         self.tabs.addTab(self.config_panel, "Config")
         self.tabs.addTab(self.flow_panel, "TestFlow")
         self.tabs.addTab(self.limits_panel, "Limits/Bins")
         self.tabs.addTab(self.run_panel, "Run")
-        self.tabs.addTab(self.batch_panel, "Batch")
         self.tabs.addTab(self.pattern_panel, "Pattern")
+        self.tabs.addTab(self.stdf_panel, "STDF")
+        self.tabs.addTab(self.batch_panel, "Batch")
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -64,6 +69,8 @@ class MainWindow(QMainWindow):
 
         self.status = QLabel("ready")
         self.statusBar().addWidget(self.status)
+        self.copyright = QLabel("© lantianjialiang")
+        self.statusBar().addPermanentWidget(self.copyright)
         self._build_menu()
         set_canvas_theme(theme)
         self.setStyleSheet(stylesheet(theme))
@@ -95,6 +102,18 @@ class MainWindow(QMainWindow):
             action = QAction(f"{name} theme", self)
             action.triggered.connect(lambda _checked=False, n=name: self.set_theme(n))
             view_menu.addAction(action)
+
+        help_menu = self.menuBar().addMenu("&Help")
+        about = QAction("&About pyate", self)
+        about.triggered.connect(self._about)
+        help_menu.addAction(about)
+
+    def _about(self) -> None:
+        QMessageBox.about(
+            self,
+            "About pyate",
+            "pyate — offline ATE simulator\n\nMIT License\n© lantianjialiang",
+        )
 
     def set_theme(self, theme: str) -> None:
         """Switch between the dark and light style sheets."""

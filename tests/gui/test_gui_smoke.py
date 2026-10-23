@@ -56,7 +56,9 @@ def finished_window(qapp: QApplication, tmp_path_factory: pytest.TempPathFactory
 # --------------------------------------------------------------------- shell
 def test_window_builds_every_tab(window: MainWindow) -> None:
     titles = [window.tabs.tabText(index) for index in range(window.tabs.count())]
-    assert titles == ["Config", "TestFlow", "Limits/Bins", "Run", "Batch", "Pattern"]
+    assert titles == ["Config", "TestFlow", "Limits/Bins", "Run", "Pattern", "STDF", "Batch"]
+    assert window.theme == "light"
+    assert "lantianjialiang" in window.copyright.text()
 
 
 def test_window_loads_the_session(window: MainWindow) -> None:
@@ -85,7 +87,7 @@ def test_theme_switching_repaints_widgets(window: MainWindow) -> None:
     assert light_css != window.styleSheet()
     assert light_canvas != canvas_colors()["bg"]
     assert stylesheet("light") != stylesheet("dark")
-    set_theme("dark")
+    set_theme("light")
 
 
 def test_config_panel_shows_the_configuration_tree(window: MainWindow) -> None:
@@ -93,6 +95,31 @@ def test_config_panel_shows_the_configuration_tree(window: MainWindow) -> None:
     assert tree.topLevelItemCount() > 0
     labels = [tree.topLevelItem(i).text(0) for i in range(tree.topLevelItemCount())]
     assert any("session" in label.lower() or "tester" in label.lower() for label in labels)
+
+
+def test_config_tree_shows_pass_and_fail_patterns(qapp: QApplication) -> None:
+    win = MainWindow(str(CONFIGS / "demo_intro" / "session.yaml"))
+    try:
+        tree = win.config_panel.tree
+        patterns = next(
+            tree.topLevelItem(index)
+            for index in range(tree.topLevelItemCount())
+            if tree.topLevelItem(index).text(0) == "patterns"
+        )
+        names = [patterns.child(index).text(0) for index in range(patterns.childCount())]
+        assert names == ["cnt_basic.pat", "cnt_fail.pat"]
+        fail = patterns.child(1)
+        assert "SO" in fail.text(1)
+        tree.setCurrentItem(fail)
+        qapp.processEvents()
+        editor = win.config_panel.editor
+        assert editor.tabs.tabText(0) == "说明"
+        assert "SO" in editor.text.toPlainText()
+        assert editor.save_btn.isEnabled() is False
+        note = editor.form_layout.itemAt(0).widget()
+        assert note is not None and "S0" in note.text()
+    finally:
+        win.close()
 
 
 def test_config_tree_splits_key_and_value(window: MainWindow) -> None:
@@ -287,10 +314,31 @@ def test_run_page_has_a_summary_grouped_by_site(window: MainWindow) -> None:
     panel = window.run_panel
     labels = [panel.view_tabs.tabText(index) for index in range(panel.view_tabs.count())]
     assert "Summary" in labels
-    assert panel.group_by.count() == 2
-    assert panel.summary_table.columnCount() == 10
-    assert panel.summary_probability is not None
-    assert panel.probability is not None
+    assert "Charts" not in labels
+    assert [box.text() for box in panel.group_by.findChildren(type(panel.site_checks[0]))] == [
+        "site", "wafer", "part",
+    ]
+    assert panel.group_by.groups() == ()
+    assert panel.datalog.columnCount() == 9
+    assert panel.summary_table.columnCount() == 16
+    assert panel.summary_table.horizontalHeaderItem(15).text() == "cpk"
+    window.show()
+    panel.view_tabs.setCurrentIndex(labels.index("Summary"))
+    QApplication.processEvents()
+    panel.summary_histogram.set_limits(0.5, 1.5)
+    panel.summary_histogram.set_bins([(0.0, 1.0, 3), (1.0, 2.0, 1)])
+    panel.summary_trend.set_limits(0.5, 1.5)
+    panel.summary_trend.set_values([0.4, 0.8, 1.2, 1.6])
+    panel.summary_probability.set_limits(0.5, 1.5)
+    panel.summary_probability.set_points([(0.4, -1.0), (1.0, 0.0), (1.6, 1.0)])
+    QApplication.processEvents()
+    panel.summary_histogram.repaint()
+    panel.summary_trend.repaint()
+    panel.summary_probability.repaint()
+    assert panel.summary_histogram._lo_pos is not None
+    assert panel.summary_trend._hi_pos is not None
+    assert panel.summary_probability._hi_pos is not None
+    assert panel.clear_btn.text() == "Clear data"
 
 
 def test_config_editor_opens_a_levels_document(window: MainWindow) -> None:

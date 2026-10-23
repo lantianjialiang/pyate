@@ -8,25 +8,27 @@
 Prober/Handler 是带接触不良、卡料等真实故障的模拟器。同一个 `seed` 下整条链路逐记录可复现，
 因此适合做测试程序调试、datalog 格式验证、良率/UPH 评估与流水线集成联调。
 
+© lantianjialiang. Released under the MIT License.
+
 ## 特性
 
 | 能力 | 说明 |
 |---|---|
-| 配置 | 一份 `session.yaml` 引用 `tester/channel_map/levels/timing/limits/binning/dut_profile/...`，pydantic v2 严格校验，错误带文件与字段路径 |
+| 配置 | 一份 `session.yaml` 引用 `tester/channel_map/loadboard/levels/timing/limits/binning/dut_profile/...`。pin 到通道只写在 `channel_map`；`loadboard` 只保留 `board_id`、`site_count`、`relay_map`。pydantic v2 严格校验，错误带文件与字段路径 |
 | 虚拟 HAL | DPS（电压/电流/钳位/过流）、PMU（continuity/leakage）、Relay、Digital（pattern 驱动/比较），资源冲突检测，虚拟时间推进 |
 | DUT 模型 | `counter/shiftreg/lfsr/adder/gates/sram/composite`，pin 级数字仿真 + 可观测量（IDD、leakage、Vdiode、Vout、fmax） |
 | 缺陷注入 | `stuck_at/open/short/leakage/high_idd/slow/random_bitflip`，按概率与工艺波动注入，可复现 |
 | 良率采样 | 空间相关良率（边缘加权、簇状失效），逐 die 独立采样 |
 | TestItem | 13 种内置项：`continuity` `leakage_ih_il` `idd_static` `idd_dynamic` `vol_voh` `functional` `vdd_min_search` `fmax_search` `shmoo` `sram_march` `power_up_down` `delay_ms` `user_code`，插件可加 |
 | TestFlow | 顺序/`group`/`if-then-else` 分支/`loop`/`goto_bin`/`on_fail`（continue/stop/retest）/启用位/`only`/`skip` |
-| 多 Site | `serial/sequential/thread/process(退化为线程)/async`，item 级 `SiteBarrier` 同步、site 崩溃隔离、UPH 估算 |
+| 多 Site | `sequential/thread/process(退化为线程)/async`，item 级 `SiteBarrier` 同步、site 崩溃隔离、UPH 估算 |
 | CP | 300/150 mm 圆形 wafer map、die 网格、notch、skip list、edge exclusion、touchdown 扫描、binmap（txt/svg/csv） |
 | FT | Handler 循环、tray/part 编号、jam 与 contact fail、重测（bins/max_retries） |
 | Lot 流转 | `CP1 → CP2 → FT1` 跨阶段，KGD（Known Good Die）逐级收窄，累计良率报告 |
 | 批量 | `batch.yaml` 参数扫（笛卡尔积）、串行/线程/进程、`fail_fast`、聚合 yield/pareto/Cpk |
 | STDF | 自研 V4 writer（FAR/ATR/MIR/SDR/WIR/WCR/PIR/PTR/FTR/PRR/TSR/HBR/SBR/PCR/MRR），可 gzip、大小端；`reader_check` + pystdf 交叉校验 |
 | Datalog | CSV、Text、JSONL（插件）、`stats.json`（Cpk/直方图）、`summary.json` |
-| GUI | 6 个页签（Config/TestFlow/Limits/Run/Batch/Pattern）、实时 datalog、wafer map、bin bar、shmoo、深浅主题、wafer map 导出 PNG |
+| GUI | 7 个页签（Config / TestFlow / Limits/Bins / Run / Pattern / STDF / Batch）、实时 datalog、wafer map、bin bar、shmoo、深浅主题、wafer map 导出 PNG |
 | 插件 | pluggy hookspec + 目录扫描/entry points，`pyate plugin new` 脚手架，示例 ADC DUT 与 JSONL sink |
 
 ## 安装
@@ -49,6 +51,38 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
+## 不安装 Python 直接用
+
+在一台已经能跑开发环境的 Windows 上打包，得到一个自带解释器和界面库的目录。把整个目录拷到没装 Python 的电脑上即可。
+
+```powershell
+pip install -e ".[package]"
+python tools\build_windows.py
+```
+
+产物是 `dist\pyate\`。里面有：
+
+| 文件 | 作用 |
+|---|---|
+| `pyate.exe` | 命令行，用法和 `pyate` 相同 |
+| `pyate-gui.exe` | 无黑色控制台的界面。双击打开，参数会转给 `gui` |
+| `启动界面.bat` | 双击启动界面 |
+| `configs\` | 和仓库里同一套示例 |
+| `_internal\` | 打包进去的运行时，不要拆开 |
+
+`pyate.exe` 和 `pyate-gui.exe` 必须和 `_internal`、`configs` 放在一起。只拷 exe 无法运行。
+
+PowerShell 不会在当前目录里搜索命令，所以要先进入目录，并在文件名前加 `.\`：
+
+```powershell
+cd dist\pyate
+.\pyate-gui.exe configs\demo_intro\session.yaml
+.\pyate.exe config validate configs\demo_cp\session.yaml
+.\pyate.exe run configs\demo_intro\session.yaml
+```
+
+`demo_cp`、`demo_ft`、`demo_intro`、`demo_batch` 都能加载。`demo_intro` 复用 `demo_cp` 的 4 site 负载板，而这次只开 1 个 site，校验会提示一条 `site_count` 警告，程序仍可运行。电源 pin 用 `tester.dps_channels`（示例里是 16 路，并且跨 site 不能重复）；其余 pin 用 `digital_channels`。
+
 ## 运行
 
 在仓库根目录执行。装好之后直接用 `pyate`；还没安装时用模块入口，并让 Python 能找到 `src`。
@@ -57,16 +91,16 @@ PowerShell，打开最短示例（断点、pattern 调试、shmoo 的走读在 [
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m pyate.cli.main gui configs\demo_intro\session.yaml --theme dark
+python -m pyate.cli.main gui configs\demo_intro\session.yaml
 ```
 
 已经 `pip install -e ".[gui]"` 时可以省略 `PYTHONPATH`：
 
 ```powershell
-pyate gui configs\demo_intro\session.yaml --theme dark
+pyate gui configs\demo_intro\session.yaml
 ```
 
-完整 CP 晶圆把 session 换成 `configs\demo_cp\session.yaml`。不带 session 会打开空窗口，再在 Config 页里选 `session.yaml`。`--theme` 取 `dark` 或 `light`。
+完整 CP 晶圆把 session 换成 `configs\demo_cp\session.yaml`。不带 session 会打开空窗口，再在 Config 页里选 `session.yaml`。默认浅色主题，`--theme dark` 切换深色。
 
 同一入口也可以不进界面，直接跑一轮：
 
@@ -105,7 +139,7 @@ pyate stdf dump out/cli_run/LOT-CP-0001_W01_CP1.stdf --type PIR --type PRR --lim
 pyate pattern run configs/demo_cp/patterns/cnt_basic.pat --dut counter --cycles 2000
 
 # 8. GUI（也可带上 session，见上一节「运行」）
-pyate gui configs/demo_cp/session.yaml --theme dark
+pyate gui configs/demo_cp/session.yaml
 ```
 
 `pyate run` 会打印每个 unit 的 tested/passed/yield/UPH 与产物路径；`--json` 输出机器可读结果，
@@ -198,7 +232,7 @@ pytest tests/gui -q           # E2E-GUI（QT_QPA_PLATFORM=offscreen）
 
 ## 界面
 
-`pyate gui configs/demo_cp/session.yaml` 打开主窗口，六个页签对应一条完整工作流。
+`pyate gui configs/demo_cp/session.yaml` 打开主窗口。页签顺序是 Config、TestFlow、Limits/Bins、Run、Pattern、STDF、Batch。
 下面的截图由 `tools/shoot_gui.py` 离屏渲染真实窗口得到（不是手绘原型）：
 
 | | |

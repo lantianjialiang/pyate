@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -506,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = sub.add_parser("gui", help="launch the PySide6 GUI")
     gui.add_argument("session", nargs="?")
-    gui.add_argument("--theme", choices=["dark", "light"], default="dark")
+    gui.add_argument("--theme", choices=["dark", "light"], default="light")
     gui.set_defaults(func=cmd_gui)
 
     plugin = sub.add_parser("plugin", help="plugin tools")
@@ -524,6 +525,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Entry point (console script ``pyate``)."""
+    # Required so a frozen ``pyate.exe`` can use batch ``--executor process``.
+    multiprocessing.freeze_support()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "pattern" and args.pattern_command == "run":
@@ -547,4 +550,5 @@ def _load_plugins() -> Any:
 
 
 if __name__ == "__main__":  # pragma: no cover
+    multiprocessing.freeze_support()
     raise SystemExit(main())

@@ -42,6 +42,7 @@ def test_summary_groups_by_site_and_probability_plot() -> None:
         bus.publish(EventKind.TEST_RESULT, {"result": {
             "test_num": 2000, "test_name": "idd_static", "site": site,
             "value": value, "unit": "A", "passed": value < 4.0,
+            "lo_limit": 0.0, "hi_limit": 6.0,
         }})
     combined = model.summary_rows(by_site=False)
     assert len(combined) == 1
@@ -50,6 +51,11 @@ def test_summary_groups_by_site_and_probability_plot() -> None:
     assert combined[0].passed == 2
     assert combined[0].failed == 1
     assert combined[0].mean == pytest.approx(3.0)
+    assert combined[0].stdev == pytest.approx(2.0)
+    assert combined[0].lo == pytest.approx(0.0)
+    assert combined[0].hi == pytest.approx(6.0)
+    assert combined[0].cp == pytest.approx(0.5)
+    assert combined[0].cpk == pytest.approx(0.5)
     per_site = model.summary_rows(by_site=True)
     assert [(row.site, row.count) for row in per_site] == [(1, 2), (2, 1)]
     assert model.trend(2000, 1) == [1.0, 3.0]
@@ -58,6 +64,72 @@ def test_summary_groups_by_site_and_probability_plot() -> None:
     assert points[0][0] < points[-1][0]
     assert points[0][1] < points[-1][1]
     assert model.histogram(2000, site=2)
+    bus.publish(EventKind.UNIT_START, {"unit": "W01", "kind": "wafer"})
+    bus.publish(EventKind.TEST_RESULT, {"result": {
+        "test_num": 2000, "test_name": "idd_static", "site": 1,
+        "value": 2.0, "passed": True,
+    }})
+    bus.publish(EventKind.UNIT_START, {"unit": "W02", "kind": "wafer"})
+    bus.publish(EventKind.TEST_RESULT, {"result": {
+        "test_num": 2000, "test_name": "idd_static", "site": 1,
+        "value": 4.0, "passed": False,
+    }})
+    by_wafer = model.summary_rows(group="wafer")
+    assert [(row.wafer, row.count) for row in by_wafer] == [("", 3), ("W01", 1), ("W02", 1)]
+    both = model.summary_rows(groups=("site", "wafer"))
+    assert {(row.site, row.wafer, row.count) for row in both} == {
+        (1, "", 2), (2, "", 1), (1, "W01", 1), (1, "W02", 1),
+    }
+    assert all(row.part is None for row in both)
+
+
+def test_inspect_stdf_reports_lot_stats_and_per_wafer_tests(tmp_path: Path) -> None:
+    from pyate.api import inspect_stdf
+    from pyate.datalog.stdf.writer import StdfWriter
+    from pyate.engine.context import PartResult, TestResult
+
+    path = tmp_path / "tiny.stdf"
+    writer = StdfWriter(path, site_count=1)
+    writer.write_mir(lot_id="LOT-T", job_name="INTRO", stage="CP1")
+    writer.write_wir("W01")
+    part = PartResult(part_id="P1", site=1, x=0, y=0, soft_bin=1, hard_bin=1, passed=True)
+    writer.start_part(part)
+    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1, value=1.5, passed=True))
+    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1, value=2.5, passed=True))
+    writer.end_part(part)
+    writer.write_wrr(wafer_id="W01", good=1)
+    writer.write_summaries()
+    writer.close()
+
+    report = inspect_stdf(path)
+    assert report["ok"], report["errors"]
+    assert report["stats"]["lot_id"] == "LOT-T"
+    assert report["stats"]["parts"] == 1
+    assert report["stats"]["good"] == 1
+    assert report["stats"]["ptr_count"] == 2
+    assert report["stats"]["wafers"][0]["wafer_id"] == "W01"
+    assert any(row["bin"] == 1 for row in report["stats"]["soft_bins"])
+    model = RunViewModel()
+    for row in report["measurements"]:
+        model.add_measurement(
+            test_num=row["test_num"], name=row["name"], site=row["site"],
+            value=row["value"], passed=row["passed"], wafer=row["wafer"],
+        )
+    grouped = model.summary_rows(group="wafer")
+    assert grouped[0].wafer == "W01"
+    assert grouped[0].count == 2
+    assert grouped[0].mean == pytest.approx(2.0)
+
+
+def test_intro_patterns_explain_the_failure_and_list_the_pass() -> None:
+    session = Session(CONFIGS / "demo_intro" / "session.yaml")
+    rows = {item["name"]: item for item in session.pattern_files()}
+    assert set(rows) == {"cnt_basic.pat", "cnt_fail.pat"}
+    assert "通过" in rows["cnt_basic.pat"]["summary"]
+    fail = rows["cnt_fail.pat"]
+    assert "SO" in fail["summary"]
+    assert "H" in fail["note"]
+    assert "S0" in fail["note"]
 
 
 def test_intro_session_is_the_short_walkthrough() -> None:

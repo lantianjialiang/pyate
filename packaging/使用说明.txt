@@ -1,0 +1,18 @@
+PyATE 独立程序（不需要安装 Python）
+© lantianjialiang
+
+把整个 pyate 文件夹拷到目标电脑。不要只拷 exe，_internal 和 configs 必须留在同一目录。
+
+启动界面：
+  双击 启动界面.bat
+  或双击 pyate-gui.exe
+  也可以：pyate-gui.exe configs\demo_intro\session.yaml
+
+命令行（先 cd 到本目录。PowerShell 要加 .\ ）：
+  .\pyate.exe version
+  .\pyate.exe config validate configs\demo_intro\session.yaml
+  .\pyate.exe run configs\demo_intro\session.yaml
+  .\pyate-gui.exe configs\demo_cp\session.yaml
+
+示例配置在 configs\ 下，和开发仓库里的是同一套。输出写到运行时的 out\ 目录。
+默认浅色主题。深色：pyate-gui.exe --theme dark

@@ -92,6 +92,94 @@ def _fmt_stat(value: float | None) -> str:
     return _fmt_num(value)
 
 
+SUMMARY_COLUMNS = [
+    "test", "name", "site", "wafer", "part", "n", "pass", "fail",
+    "mean", "stdev", "min", "max", "lo", "hi", "cp", "cpk",
+]
+
+
+def summary_cells(row: Any) -> list[str]:
+    """Display text for one test-summary row, including capability."""
+    return [
+        str(row.test_num),
+        row.name,
+        "all" if row.site is None else str(row.site),
+        "all" if not row.wafer else row.wafer,
+        "all" if row.part is None else (row.part or "(none)"),
+        str(row.count),
+        str(row.passed),
+        str(row.failed),
+        _fmt_stat(row.mean),
+        _fmt_stat(row.stdev),
+        _fmt_stat(row.minimum),
+        _fmt_stat(row.maximum),
+        _fmt_stat(row.lo),
+        _fmt_stat(row.hi),
+        _fmt_stat(row.cp),
+        _fmt_stat(row.cpk),
+    ]
+
+
+class SortCell(QTableWidgetItem):
+    """Table cell that sorts by the value stored in ``UserRole``."""
+
+    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: N802 - Qt naming
+        left = self.data(Qt.UserRole)
+        right = other.data(Qt.UserRole)
+        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+            if not isinstance(left, bool) and not isinstance(right, bool):
+                return float(left) < float(right)
+        return (self.text() or "") < (other.text() or "")
+
+
+class GroupByBox(QWidget):
+    """Checkboxes for summary dimensions. Several can be on at once."""
+
+    changed = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        self._boxes: dict[str, QCheckBox] = {}
+        for name in ("site", "wafer", "part"):
+            box = QCheckBox(name)
+            box.toggled.connect(self._emit)
+            self._boxes[name] = box
+            row.addWidget(box)
+
+    def groups(self) -> tuple[str, ...]:
+        """Selected dimensions, in display order."""
+        return tuple(name for name, box in self._boxes.items() if box.isChecked())
+
+    def _emit(self, _checked: bool = False) -> None:
+        self.changed.emit()
+
+
+def configure_table(table: QTableWidget) -> None:
+    """Make every column user-resizable and sortable by its header."""
+    header = table.horizontalHeader()
+    header.setSectionResizeMode(QHeaderView.Interactive)
+    header.setStretchLastSection(False)
+    header.setSectionsClickable(True)
+    header.setSortIndicatorShown(False)
+    header.sortIndicatorChanged.connect(lambda *_args: header.setSortIndicatorShown(True))
+    table.setSortingEnabled(True)
+
+
+def _put_cell(table: QTableWidget, row: int, column: int, text: str,
+              sort_value: Any) -> QTableWidgetItem:
+    item = table.item(row, column)
+    if not isinstance(item, SortCell):
+        item = SortCell(text)
+        item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+        table.setItem(row, column, item)
+    elif item.text() != text:
+        item.setText(text)
+    item.setData(Qt.UserRole, sort_value if sort_value is not None else text)
+    return item
+
+
 def _split_label(label: str) -> tuple[str, str]:
     """Split ``"key: value"`` into its two halves (no separator → no value)."""
     key, sep, value = label.partition(": ")
@@ -207,6 +295,10 @@ class ConfigPanel(QWidget):
     def _add_config_node(self, parent: Any, node: dict[str, Any]) -> None:
         text, value = _split_label(node.get("label", ""))
         item = _tree_item(parent, text, value, str(node.get("file_key") or ""))
+        pattern_path = str(node.get("pattern_path") or "")
+        if pattern_path:
+            item.setData(0, Qt.UserRole + 1, pattern_path)
+            item.setData(0, Qt.UserRole + 2, str(node.get("note") or ""))
         for child in node.get("children", []) or []:
             self._add_config_node(item, child)
         item.setExpanded(True)
@@ -214,6 +306,10 @@ class ConfigPanel(QWidget):
     def _on_tree_selection(self) -> None:
         items = self.tree.selectedItems()
         if not items:
+            return
+        pattern_path = items[0].data(0, Qt.UserRole + 1)
+        if pattern_path:
+            self._show_pattern(str(pattern_path), str(items[0].data(0, Qt.UserRole + 2) or ""))
             return
         key = items[0].data(0, Qt.UserRole)
         if not key:
@@ -228,9 +324,18 @@ class ConfigPanel(QWidget):
         self.editor.load_document(document.key, document.path, document.kind,
                                   document.text, document.data, document.schema)
 
+    def _show_pattern(self, path: str, note: str) -> None:
+        """Show a ``.pat`` file. It is not a YAML config, so Save stays off."""
+        try:
+            text = Path(path).read_text(encoding="utf-8")
+        except OSError as exc:
+            self.editor.status.setText(str(exc))
+            return
+        self.editor.load_document("pattern", path, "text", text, {"note": note}, {})
+
     def _save_file(self) -> None:
         """Write the open document after validation."""
-        if not self.editor.key:
+        if not self.editor.key or self.editor.kind == "text":
             return
         mode, payload = self.editor.payload()
         if mode == "text":
@@ -800,8 +905,10 @@ class RunPanel(QWidget):
         self.stop_btn.clicked.connect(self.stop_run)
         self.step_btn = QPushButton("Step")
         self.step_btn.clicked.connect(self.step_run)
+        self.clear_btn = QPushButton("Clear data")
+        self.clear_btn.clicked.connect(self.clear_results)
         for widget in (self.start_btn, self.pause_btn, self.resume_btn,
-                       self.step_btn, self.stop_btn):
+                       self.step_btn, self.stop_btn, self.clear_btn):
             form.addWidget(widget)
         form.addWidget(QLabel("break"))
         self.bp_spin = QSpinBox()
@@ -852,14 +959,17 @@ class RunPanel(QWidget):
         layout.addWidget(self.progress)
 
         splitter = QSplitter(Qt.Horizontal)
-        self.datalog = QTableWidget(0, 8)
+        datalog_page = QWidget()
+        datalog_layout = QVBoxLayout(datalog_page)
+        datalog_layout.setContentsMargins(0, 0, 0, 0)
+        self.datalog_count = QLabel("0 rows")
+        datalog_layout.addWidget(self.datalog_count)
+        self.datalog = QTableWidget(0, 9)
         self.datalog.setHorizontalHeaderLabels(
-            ["site", "test #", "name", "value", "unit", "lo", "hi", "result"])
-        header = self.datalog.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
-        header.setSectionResizeMode(7, QHeaderView.Stretch)
-        for column, width in ((0, 60), (1, 80), (3, 120), (4, 70), (5, 90), (6, 90)):
+            ["site", "part", "test #", "name", "value", "unit", "lo", "hi", "result"])
+        configure_table(self.datalog)
+        for column, width in ((0, 50), (1, 140), (2, 70), (3, 140),
+                              (4, 90), (5, 50), (6, 70), (7, 70), (8, 70)):
             self.datalog.setColumnWidth(column, width)
         self.datalog.verticalHeader().setVisible(False)
         self.datalog.setAlternatingRowColors(True)
@@ -867,13 +977,16 @@ class RunPanel(QWidget):
         self.datalog.setSelectionBehavior(QAbstractItemView.SelectRows)
         _mono(self.datalog)
         self.datalog.itemSelectionChanged.connect(self._on_datalog_select)
-        splitter.addWidget(self.datalog)
+        datalog_layout.addWidget(self.datalog, 1)
+        splitter.addWidget(datalog_page)
 
         self.view_tabs = QTabWidget()
         map_page = QWidget()
         map_layout = QVBoxLayout(map_page)
         map_layout.setContentsMargins(0, 0, 0, 0)
         self.wafer = WaferMapWidget()
+        self.layout_label = QLabel("footprint: -")
+        map_layout.addWidget(self.layout_label)
         map_layout.addWidget(self.wafer, 3)
         self.bin_bar = BinBarWidget()
         map_layout.addWidget(self.bin_bar)
@@ -887,21 +1000,22 @@ class RunPanel(QWidget):
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_row = QHBoxLayout()
         summary_row.addWidget(QLabel("group by"))
-        self.group_by = QComboBox()
-        self.group_by.addItem("test", "test")
-        self.group_by.addItem("site", "site")
-        self.group_by.currentIndexChanged.connect(lambda _i: self._fill_summary())
+        self.group_by = GroupByBox()
+        self.group_by.changed.connect(self._fill_summary)
         summary_row.addWidget(self.group_by)
+        self.summary_count = QLabel("0 rows")
+        summary_row.addWidget(self.summary_count)
         summary_row.addStretch(1)
         summary_layout.addLayout(summary_row)
-        self.summary_table = QTableWidget(0, 10)
-        self.summary_table.setHorizontalHeaderLabels(
-            ["test", "name", "site", "n", "pass", "fail", "mean", "stdev", "min", "max"])
+        self.summary_table = QTableWidget(0, len(SUMMARY_COLUMNS))
+        self.summary_table.setHorizontalHeaderLabels(SUMMARY_COLUMNS)
         self.summary_table.verticalHeader().setVisible(False)
         self.summary_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.summary_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.summary_table.setAlternatingRowColors(True)
-        self.summary_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        configure_table(self.summary_table)
+        self.summary_table.setColumnWidth(1, 140)
+        self.summary_table.setColumnWidth(4, 140)
         self.summary_table.itemSelectionChanged.connect(self._paint_summary_charts)
         _mono(self.summary_table)
         summary_layout.addWidget(self.summary_table, 2)
@@ -918,28 +1032,7 @@ class RunPanel(QWidget):
             chart_host.addLayout(column, 1)
         summary_layout.addLayout(chart_host, 1)
         self.view_tabs.addTab(summary_page, "Summary")
-        self._summary_keys: list[tuple[int, int | None]] = []
-
-        chart_page = QWidget()
-        chart_layout = QVBoxLayout(chart_page)
-        chart_layout.setContentsMargins(0, 0, 0, 0)
-        chart_row = QHBoxLayout()
-        chart_row.addWidget(QLabel("test"))
-        self.test_box = QComboBox()
-        self.test_box.currentIndexChanged.connect(lambda _i: self._paint_charts())
-        chart_row.addWidget(self.test_box, 1)
-        chart_layout.addLayout(chart_row)
-        self.histogram = HistogramWidget()
-        self.trend = TrendWidget()
-        self.probability = ProbabilityWidget()
-        for title, widget in (("histogram", self.histogram),
-                              ("trend", self.trend),
-                              ("probability", self.probability)):
-            column = QVBoxLayout()
-            column.addWidget(QLabel(title))
-            column.addWidget(widget, 1)
-            chart_layout.addLayout(column, 1)
-        self.view_tabs.addTab(chart_page, "Charts")
+        self._summary_keys: list[tuple[int, int | None, str | None]] = []
 
         shmoo_page = QWidget()
         self.shmoo_page = shmoo_page
@@ -1048,7 +1141,7 @@ class RunPanel(QWidget):
             output_dir=self.output_dir,
             extra=extra,
         )
-        self.vm.reset()
+        self.clear_results()
         try:
             handle = RunHandle(session, options, events=EventBus())
             handle.prepare()
@@ -1061,7 +1154,44 @@ class RunPanel(QWidget):
         self.vm.detach()
         self.vm.attach(handle.events)
         self.log_view.appendPlainText("run started")
+        prober = getattr(session.loaded, "prober", None)
+        if prober is not None:
+            self.log_view.appendPlainText(
+                f"prober layout {prober.layout.cols}x{prober.layout.rows} "
+                f"scan {prober.scan}  sites {self.sites_spin.value()}"
+            )
         handle.start()
+
+    def clear_results(self) -> None:
+        """Drop every result from the previous run so the next one starts empty."""
+        self.vm.detach()
+        if self.handle is not None:
+            self.handle.stop()
+            self.handle = None
+        self.vm.reset()
+        self.datalog.setRowCount(0)
+        self.wafer.set_data({}, wafer_size_mm=self.wafer_size, die_size_mm=self.die_size, details={})
+        self.bin_bar.set_data([])
+        self.shmoo.set_data({})
+        self.tray.set_data({}, {})
+        self.log_view.clear()
+        self.progress.setValue(0)
+        self.unit_label.setText("unit: -")
+        self.parts_label.setText("parts: 0")
+        self.yield_label.setText("yield: -")
+        self.bins_label.setText("bins: 0")
+        self.uph_label.setText("uph: -")
+        self._summary_keys = []
+        self.summary_table.setRowCount(0)
+        self.datalog_count.setText("0 rows")
+        self.summary_count.setText("0 rows")
+        self.layout_label.setText("footprint: -")
+        self.summary_histogram.set_bins([])
+        self.summary_trend.set_values([])
+        self.summary_probability.set_points([])
+        self.summary_histogram.set_limits(None, None)
+        self.summary_trend.set_limits(None, None)
+        self.summary_probability.set_limits(None, None)
 
     def pause_run(self) -> None:
         """Pause the run."""
@@ -1105,7 +1235,7 @@ class RunPanel(QWidget):
 
     def _on_datalog_select(self) -> None:
         row = self.datalog.currentRow()
-        item = self.datalog.item(row, 1) if row >= 0 else None
+        item = self.datalog.item(row, 2) if row >= 0 else None
         if item is None:
             return
         try:
@@ -1113,9 +1243,10 @@ class RunPanel(QWidget):
         except ValueError:
             return
         self.bp_spin.setValue(test_num)
-        for index in range(self.test_box.count()):
-            if self.test_box.itemData(index) == test_num:
-                self.test_box.setCurrentIndex(index)
+        for index in range(self.summary_table.rowCount()):
+            item = self.summary_table.item(index, 0)
+            if item is not None and item.data(Qt.UserRole) == test_num:
+                self.summary_table.setCurrentCell(index, 0)
                 return
 
     def _on_log_level(self, level: str) -> None:
@@ -1124,7 +1255,7 @@ class RunPanel(QWidget):
 
     def _refill_log(self) -> None:
         self.log_view.clear()
-        for entry in self.vm.logs():
+        for entry in self.vm.logs:
             if self._log_level != "ALL" and entry.level != self._log_level:
                 continue
             self.log_view.appendPlainText(f"{entry.level}: {entry.message}")
@@ -1175,59 +1306,37 @@ class RunPanel(QWidget):
         if path and self.shmoo.export_csv(path):
             self.log_view.appendPlainText(f"shmoo csv saved to {path}")
 
-    def _chart_site(self) -> int | None:
-        data = self.site_filter.currentData()
-        return None if data is None else int(data)
-
-    def _paint_charts(self) -> None:
-        test_num = self.test_box.currentData()
-        site = self._chart_site()
-        if test_num is None:
-            self.histogram.set_bins([])
-            self.trend.set_values([])
-            self.probability.set_points([])
-            return
-        number = int(test_num)
-        self.histogram.set_bins(self.vm.histogram(number, site=site))
-        self.trend.set_values(self.vm.trend(number, site))
-        self.probability.set_points(self.vm.probability(number, site))
-
     def _fill_summary(self) -> None:
-        """Rebuild the test summary. Group by site splits one row per site."""
-        by_site = self.group_by.currentData() == "site"
-        rows = self.vm.summary_rows(by_site=by_site)
-        keys = [(row.test_num, row.site) for row in rows]
+        """Rebuild the test summary for the checked group dimensions."""
+        rows = self.vm.summary_rows(groups=self.group_by.groups())
+        keys = [(row.test_num, row.site, row.wafer, row.part) for row in rows]
         selected = self.summary_table.currentRow()
         self.summary_table.blockSignals(True)
+        self.summary_table.setSortingEnabled(False)
         if self.summary_table.rowCount() != len(rows):
             self.summary_table.setRowCount(len(rows))
         for index, row in enumerate(rows):
-            cells = [
-                str(row.test_num),
-                row.name,
-                "all" if row.site is None else str(row.site),
-                str(row.count),
-                str(row.passed),
-                str(row.failed),
-                _fmt_stat(row.mean),
-                _fmt_stat(row.stdev),
-                _fmt_stat(row.minimum),
-                _fmt_stat(row.maximum),
-            ]
+            cells = summary_cells(row)
+            sorts = (
+                row.test_num, row.name,
+                -1 if row.site is None else row.site,
+                "" if row.wafer is None else row.wafer,
+                "" if row.part is None else row.part,
+                row.count, row.passed, row.failed,
+                row.mean, row.stdev, row.minimum, row.maximum,
+                row.lo, row.hi, row.cp, row.cpk,
+            )
             for column, text in enumerate(cells):
-                item = self.summary_table.item(index, column)
-                if item is None:
-                    item = QTableWidgetItem(text)
-                    item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                    self.summary_table.setItem(index, column, item)
-                elif item.text() != text:
-                    item.setText(text)
-            self.summary_table.item(index, 0).setData(Qt.UserRole, row.test_num)
-            self.summary_table.item(index, 2).setData(Qt.UserRole, row.site)
-        if rows and (selected < 0 or selected >= len(rows) or keys != self._summary_keys):
-            if not (0 <= selected < len(rows)):
-                self.summary_table.setCurrentCell(0, 0)
+                _put_cell(self.summary_table, index, column, text, sorts[column])
+            self.summary_table.item(index, 0).setData(Qt.UserRole + 1, row.test_num)
+            self.summary_table.item(index, 2).setData(Qt.UserRole + 1, row.site)
+            self.summary_table.item(index, 3).setData(Qt.UserRole + 1, row.wafer)
+            self.summary_table.item(index, 4).setData(Qt.UserRole + 1, row.part)
+        if rows and not (0 <= selected < len(rows)):
+            self.summary_table.setCurrentCell(0, 0)
         self._summary_keys = keys
+        self.summary_count.setText(f"{len(rows)} rows")
+        self.summary_table.setSortingEnabled(True)
         self.summary_table.blockSignals(False)
         self._paint_summary_charts()
 
@@ -1235,35 +1344,31 @@ class RunPanel(QWidget):
         row_index = self.summary_table.currentRow()
         test_item = self.summary_table.item(row_index, 0) if row_index >= 0 else None
         site_item = self.summary_table.item(row_index, 2) if row_index >= 0 else None
+        wafer_item = self.summary_table.item(row_index, 3) if row_index >= 0 else None
+        part_item = self.summary_table.item(row_index, 4) if row_index >= 0 else None
         if test_item is None:
             self.summary_histogram.set_bins([])
             self.summary_trend.set_values([])
             self.summary_probability.set_points([])
+            self.summary_histogram.set_limits(None, None)
+            self.summary_trend.set_limits(None, None)
+            self.summary_probability.set_limits(None, None)
             return
-        test_num = int(test_item.data(Qt.UserRole))
-        site = None if site_item is None else site_item.data(Qt.UserRole)
-        site_id = None if site is None else int(site)
-        self.summary_histogram.set_bins(self.vm.histogram(test_num, site=site_id))
-        self.summary_trend.set_values(self.vm.trend(test_num, site_id))
-        self.summary_probability.set_points(self.vm.probability(test_num, site_id))
-
-    def _sync_tests(self) -> None:
-        numbers = self.vm.test_numbers()
-        existing = [self.test_box.itemData(index) for index in range(self.test_box.count())]
-        wanted = [num for num, _name in numbers]
-        if existing == wanted:
-            return
-        current = self.test_box.currentData()
-        self.test_box.blockSignals(True)
-        self.test_box.clear()
-        for num, name in numbers:
-            self.test_box.addItem(f"{num} {name}", num)
-        if current in wanted:
-            for index, num in enumerate(wanted):
-                if num == current:
-                    self.test_box.setCurrentIndex(index)
-                    break
-        self.test_box.blockSignals(False)
+        test_num = int(test_item.data(Qt.UserRole + 1))
+        site_id = None if site_item is None else site_item.data(Qt.UserRole + 1)
+        if site_id is not None:
+            site_id = int(site_id)
+        wafer_id = None if wafer_item is None else wafer_item.data(Qt.UserRole + 1)
+        part_id = None if part_item is None else part_item.data(Qt.UserRole + 1)
+        lo, hi = self.vm.limits_of(test_num, site_id, wafer_id, part_id)
+        self.summary_histogram.set_limits(lo, hi)
+        self.summary_trend.set_limits(lo, hi)
+        self.summary_probability.set_limits(lo, hi)
+        self.summary_histogram.set_bins(
+            self.vm.histogram(test_num, site=site_id, wafer=wafer_id, part=part_id))
+        self.summary_trend.set_values(self.vm.trend(test_num, site_id, wafer_id, part_id))
+        self.summary_probability.set_points(
+            self.vm.probability(test_num, site_id, wafer_id, part_id))
 
     def export_wafer_map(self) -> None:
         """Save the current wafer map as PNG."""
@@ -1294,11 +1399,9 @@ class RunPanel(QWidget):
                             die_size_mm=self.die_size,
                             details=self.vm.die_info)
         plot = self.vm.shmoo()
-        if plot.get("pass"):
-            self.shmoo.set_data(plot)
+        self.shmoo.set_data(plot if plot.get("pass") else {})
+        self._show_footprint()
         self.tray.set_data(self.vm.touch, self.vm.site_state)
-        self._sync_tests()
-        self._paint_charts()
         self._fill_summary()
         for entry in self.vm.take_logs():
             if self._log_level != "ALL" and entry.level != self._log_level:
@@ -1310,28 +1413,52 @@ class RunPanel(QWidget):
 
     def _on_site_filter(self) -> None:
         self._refresh_rows()
-        self._paint_charts()
 
     def _refresh_rows(self) -> None:
         site = self.site_filter.currentData()
         rows = [row for row in self.vm.rows_for_site(site)]
         colors = bins_colors()
+        self.datalog.setSortingEnabled(False)
         self.datalog.setRowCount(len(rows))
-        numeric = (3, 5, 6)
+        numeric = {0, 2, 4, 6, 7}
         for index, row in enumerate(rows):
-            values = (row.site, row.test_num, row.name, row.value, row.unit,
-                      row.lo, row.hi, "PASS" if row.passed else "FAIL")
-            for col, value in enumerate(values):
-                item = QTableWidgetItem(_fmt_num(value))
+            values = (
+                (row.site, row.site),
+                (row.part, row.part),
+                (row.test_num, row.test_num),
+                (row.name, row.name),
+                (_fmt_num(row.value), row.value),
+                (row.unit, row.unit),
+                (_fmt_num(row.lo), row.lo),
+                (_fmt_num(row.hi), row.hi),
+                ("PASS" if row.passed else "FAIL", 0 if row.passed else 1),
+            )
+            for col, (text, sort_value) in enumerate(values):
+                item = _put_cell(self.datalog, index, col, str(text), sort_value)
                 if col in numeric:
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                if col == 7:
+                if col == 8:
                     item.setForeground(QColor(colors.get(1 if row.passed else 2, "#2e9e5b")))
                 elif not row.passed:
                     item.setForeground(QColor(colors.get(2, "#c0392b")))
-                self.datalog.setItem(index, col, item)
-        if rows:
+        self.datalog.setSortingEnabled(True)
+        self.datalog_count.setText(f"{len(rows)} rows")
+        if rows and not self.datalog.horizontalHeader().isSortIndicatorShown():
             self.datalog.scrollToBottom()
+
+    def _show_footprint(self) -> None:
+        """Show the touchdown shape the prober is actually using."""
+        touch = self.vm.touch
+        layout = touch.get("layout") or ()
+        if len(layout) != 2:
+            return
+        scan = touch.get("scan") or "-"
+        configured = touch.get("configured_layout") or ()
+        text = f"footprint {layout[0]}×{layout[1]}  scan {scan}"
+        if len(configured) == 2 and tuple(configured) != tuple(layout):
+            text += (f"  (prober {configured[0]}×{configured[1]} "
+                     f"trimmed to {touch.get('sites', '')} sites)")
+        self.layout_label.setText(text)
 
 
 # ------------------------------------------------------------------ batch panel

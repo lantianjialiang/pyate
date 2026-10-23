@@ -238,7 +238,7 @@ class FlowExecutor:
             self._apply_limits(result)
             ctx.add_result(result)
             self._publish(EventKind.TEST_RESULT, result=result.to_dict(), site=ctx.site_id,
-                          item=name, passed=result.passed)
+                          part_id=ctx.part_id, item=name, passed=result.passed)
         if self.on_item_done is not None:
             self.on_item_done(ctx, item, results)  # type: ignore[arg-type]
         self._call_hook("after_item", ctx=ctx, item=item, results=results)
@@ -284,7 +284,7 @@ class FlowExecutor:
         ctx.add_result(result)
         ctx.stopped = True
         self._publish(EventKind.TEST_RESULT, result=result.to_dict(), site=ctx.site_id,
-                      item="continuity", passed=False)
+                      part_id=ctx.part_id, item="continuity", passed=False)
 
     def _apply_limits(self, result: TestResult) -> None:
         if result.kind == "FTR":

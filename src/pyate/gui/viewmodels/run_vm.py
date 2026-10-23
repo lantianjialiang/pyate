@@ -25,6 +25,7 @@ class DatalogRow:
 
     seq: int
     site: int
+    part: str
     test_num: int
     name: str
     value: float | None
@@ -35,7 +36,7 @@ class DatalogRow:
 
     def as_tuple(self) -> tuple[Any, ...]:
         """Row content in display order."""
-        return (self.site, self.test_num, self.name, self.value, self.unit,
+        return (self.site, self.part, self.test_num, self.name, self.value, self.unit,
                 self.lo, self.hi, "PASS" if self.passed else "FAIL")
 
 
@@ -58,6 +59,8 @@ class TestSummaryRow:
     test_num: int
     name: str
     site: int | None
+    wafer: str | None
+    part: str | None
     count: int
     passed: int
     failed: int
@@ -65,11 +68,55 @@ class TestSummaryRow:
     stdev: float | None
     minimum: float | None
     maximum: float | None
+    lo: float | None = None
+    hi: float | None = None
+    cp: float | None = None
+    cpk: float | None = None
+
+
+def _spec_limit(value: Any) -> float | None:
+    """A finite spec limit. STDF's ±1e38 sentinels mean unbounded."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or abs(number) >= 1e30:
+        return None
+    return number
+
+
+def _group_names(group: str | None, *, by_site: bool,
+                groups: Iterable[str] | None) -> set[str]:
+    """Which dimensions split a summary row. ``test`` means none of them."""
+    if groups is not None:
+        return {str(name) for name in groups if name and name != "test"}
+    if group is None:
+        group = "site" if by_site else "test"
+    if group == "test":
+        return set()
+    return {str(group)}
+
+
+def _cp_cpk(mean: float | None, stdev: float | None,
+            lo: float | None, hi: float | None) -> tuple[float | None, float | None]:
+    """Cp needs both limits; Cpk needs one. Same sample-sigma formula as the datalog."""
+    if mean is None or stdev is None:
+        return None, None
+    if stdev <= 0:
+        cp = 0.0 if lo is not None and hi is not None else None
+        cpk = 0.0 if lo is not None or hi is not None else None
+        return cp, cpk
+    cp = (hi - lo) / (6.0 * stdev) if lo is not None and hi is not None else None
+    sides: list[float] = []
+    if lo is not None:
+        sides.append((mean - lo) / (3.0 * stdev))
+    if hi is not None:
+        sides.append((hi - mean) / (3.0 * stdev))
+    return cp, (min(sides) if sides else None)
 
 
 @dataclass
 class _Acc:
-    """Running count for one ``(test_num, site)`` pair."""
+    """Running count for one ``(test_num, site, wafer)`` triple."""
 
     name: str
     count: int = 0
@@ -79,6 +126,8 @@ class _Acc:
     total_sq: float = 0.0
     minimum: float | None = None
     maximum: float | None = None
+    lo: float | None = None
+    hi: float | None = None
 
 
 #: Soft bins that count as failing (used for the yield preview before binning).
@@ -126,8 +175,9 @@ class RunViewModel:
         self._pending_logs: list[LogEntry] = []
         self._series: dict[int, deque[float]] = {}
         self._site_series: dict[tuple[int, int], deque[float]] = {}
-        self._samples: dict[tuple[int, int], list[float]] = {}
-        self._acc: dict[tuple[int, int], _Acc] = {}
+        self._wafer_series: dict[tuple[int, str], deque[float]] = {}
+        self._samples: dict[tuple[int, int, str, str], list[float]] = {}
+        self._acc: dict[tuple[int, int, str, str], _Acc] = {}
         self._test_names: dict[int, str] = {}
         self._shmoo: dict[str, Any] = {}
         self.parts = 0
@@ -200,9 +250,11 @@ class RunViewModel:
         result = data.get("result") or {}
         if result.get("skipped"):
             return
+        part = str(data.get("part_id") or result.get("part_id") or "")
         row = DatalogRow(
             seq=seq,
             site=int(result.get("site") or data.get("site") or 0),
+            part=part,
             test_num=int(result.get("test_num") or 0),
             name=str(result.get("test_name") or data.get("item") or ""),
             value=result.get("value"),
@@ -214,7 +266,8 @@ class RunViewModel:
         self._rows.append(row)
         self._pending.append(row)
         self._test_names[row.test_num] = row.name
-        acc = self._acc.setdefault((row.test_num, row.site), _Acc(name=row.name))
+        wafer = self.unit or ""
+        acc = self._acc.setdefault((row.test_num, row.site, wafer, part), _Acc(name=row.name))
         acc.name = row.name or acc.name
         acc.count += 1
         if row.passed:
@@ -223,7 +276,8 @@ class RunViewModel:
             value = float(row.value)
             self._series.setdefault(row.test_num, deque(maxlen=80)).append(value)
             self._site_series.setdefault((row.test_num, row.site), deque(maxlen=80)).append(value)
-            samples = self._samples.setdefault((row.test_num, row.site), [])
+            self._wafer_series.setdefault((row.test_num, wafer), deque(maxlen=80)).append(value)
+            samples = self._samples.setdefault((row.test_num, row.site, wafer, part), [])
             if len(samples) < 4000:
                 samples.append(value)
             acc.numeric += 1
@@ -231,6 +285,12 @@ class RunViewModel:
             acc.total_sq += value * value
             acc.minimum = value if acc.minimum is None else min(acc.minimum, value)
             acc.maximum = value if acc.maximum is None else max(acc.maximum, value)
+        lo = _spec_limit(row.lo)
+        hi = _spec_limit(row.hi)
+        if lo is not None:
+            acc.lo = lo
+        if hi is not None:
+            acc.hi = hi
         extra = result.get("extra") or {}
         if extra.get("shmoo"):
             self.set_shmoo(extra.get("shmoo"))
@@ -351,43 +411,63 @@ class RunViewModel:
         """Tests seen so far, in numeric order."""
         return [(num, self._test_names.get(num, "")) for num in sorted(self._test_names)]
 
-    def trend(self, test_num: int, site: int | None = None) -> list[float]:
-        """Recent measured values of one test (oldest first).
-
-        ``site`` limits the series to that site. ``None`` keeps the mixed series.
-        """
+    def trend(self, test_num: int, site: int | None = None,
+              wafer: str | None = None, part: str | None = None) -> list[float]:
+        """Recent measured values of one test (oldest first)."""
+        if part is not None:
+            return self._values(test_num, site, wafer, part)
+        if wafer:
+            return list(self._wafer_series.get((int(test_num), str(wafer)), ()))
         if site is None:
             return list(self._series.get(test_num, ()))
         return list(self._site_series.get((int(test_num), int(site)), ()))
 
     def histogram(self, test_num: int, bins: int = 10,
-                  site: int | None = None) -> list[tuple[float, float, int]]:
-        """Histogram of one test. ``site`` limits the sample to that site."""
-        return _histogram(self._values(test_num, site), bins)
+                  site: int | None = None,
+                  wafer: str | None = None,
+                  part: str | None = None) -> list[tuple[float, float, int]]:
+        """Histogram of one test. ``site``, ``wafer`` or ``part`` limits the sample."""
+        return _histogram(self._values(test_num, site, wafer, part), bins)
 
-    def probability(self, test_num: int, site: int | None = None) -> list[tuple[float, float]]:
+    def probability(self, test_num: int, site: int | None = None,
+                    wafer: str | None = None,
+                    part: str | None = None) -> list[tuple[float, float]]:
         """Normal probability plot as ``(value, z)`` pairs, sorted by value.
 
         ``z`` is the inverse-normal of the plotting position ``(i+0.5)/n``.
         Fewer than two numeric samples yields an empty list.
         """
-        data = sorted(self._values(test_num, site))
+        data = sorted(self._values(test_num, site, wafer, part))
         count = len(data)
         if count < 2:
             return []
         return [(value, _norm_ppf((index + 0.5) / count)) for index, value in enumerate(data)]
 
-    def summary_rows(self, *, by_site: bool = False) -> list[TestSummaryRow]:
-        """Per-test summary. ``by_site`` splits each test into one row per site."""
-        grouped: dict[tuple[int, int | None], _Acc] = {}
-        for (test_num, site), acc in self._acc.items():
-            key = (test_num, site if by_site else None)
+    def summary_rows(self, *, by_site: bool = False,
+                     group: str | None = None,
+                     groups: Iterable[str] | None = None) -> list[TestSummaryRow]:
+        """Per-test summary.
+
+        ``groups`` may contain ``site``, ``wafer`` and ``part`` together.
+        ``group="test"`` (the default) is one row per test. ``by_site=True``
+        is the same as ``group="site"``.
+        """
+        selected = _group_names(group, by_site=by_site, groups=groups)
+        grouped: dict[tuple[int, int | None, str | None, str | None], _Acc] = {}
+        for (test_num, site, wafer, part), acc in self._acc.items():
+            key = (
+                test_num,
+                site if "site" in selected else None,
+                wafer if "wafer" in selected else None,
+                part if "part" in selected else None,
+            )
             bucket = grouped.get(key)
             if bucket is None:
                 grouped[key] = _Acc(
                     name=acc.name, count=acc.count, passed=acc.passed,
                     numeric=acc.numeric, total=acc.total, total_sq=acc.total_sq,
                     minimum=acc.minimum, maximum=acc.maximum,
+                    lo=acc.lo, hi=acc.hi,
                 )
                 continue
             bucket.name = acc.name or bucket.name
@@ -400,32 +480,76 @@ class RunViewModel:
                 bucket.minimum = acc.minimum if bucket.minimum is None else min(bucket.minimum, acc.minimum)
             if acc.maximum is not None:
                 bucket.maximum = acc.maximum if bucket.maximum is None else max(bucket.maximum, acc.maximum)
+            if acc.lo is not None:
+                bucket.lo = acc.lo
+            if acc.hi is not None:
+                bucket.hi = acc.hi
         rows: list[TestSummaryRow] = []
-        for (test_num, site), acc in grouped.items():
+        for (test_num, site, wafer, part), acc in grouped.items():
             mean = (acc.total / acc.numeric) if acc.numeric else None
+            stdev = _stdev(acc)
+            cp, cpk = _cp_cpk(mean, stdev, acc.lo, acc.hi)
             rows.append(TestSummaryRow(
                 test_num=test_num,
                 name=acc.name,
                 site=site,
+                wafer=wafer,
+                part=part,
                 count=acc.count,
                 passed=acc.passed,
                 failed=acc.count - acc.passed,
                 mean=mean,
-                stdev=_stdev(acc),
+                stdev=stdev,
                 minimum=acc.minimum,
                 maximum=acc.maximum,
+                lo=acc.lo,
+                hi=acc.hi,
+                cp=cp,
+                cpk=cpk,
             ))
-        rows.sort(key=lambda row: (row.test_num, -1 if row.site is None else row.site))
+        rows.sort(key=lambda row: (
+            row.test_num,
+            -1 if row.site is None else row.site,
+            "" if row.wafer is None else row.wafer,
+            "" if row.part is None else row.part,
+        ))
         return rows
 
-    def _values(self, test_num: int, site: int | None) -> list[float]:
-        if site is None:
-            values: list[float] = []
-            for (num, _site), samples in self._samples.items():
-                if num == int(test_num):
-                    values.extend(samples)
-            return values
-        return list(self._samples.get((int(test_num), int(site)), ()))
+    def _values(self, test_num: int, site: int | None = None,
+                wafer: str | None = None, part: str | None = None) -> list[float]:
+        values: list[float] = []
+        for (num, sample_site, sample_wafer, sample_part), samples in self._samples.items():
+            if num != int(test_num):
+                continue
+            if site is not None and sample_site != int(site):
+                continue
+            if wafer is not None and sample_wafer != str(wafer):
+                continue
+            if part is not None and sample_part != str(part):
+                continue
+            values.extend(samples)
+        return values
+
+    def limits_of(self, test_num: int, site: int | None = None,
+                  wafer: str | None = None,
+                  part: str | None = None) -> tuple[float | None, float | None]:
+        """Spec limits for the same slice the summary charts are showing."""
+        lo: float | None = None
+        hi: float | None = None
+        for (num, sample_site, sample_wafer, sample_part), acc in self._acc.items():
+            if num != int(test_num):
+                continue
+            if site is not None and sample_site != int(site):
+                continue
+            if wafer is not None and sample_wafer != str(wafer):
+                continue
+            if part is not None and sample_part != str(part):
+                continue
+            if acc.lo is not None:
+                lo = acc.lo
+            if acc.hi is not None:
+                hi = acc.hi
+        return lo, hi
 
     def shmoo(self) -> dict[str, Any]:
         """Latest shmoo plot payload (empty when the run has not produced one)."""
@@ -435,6 +559,26 @@ class RunViewModel:
         """Store shmoo results coming from a test item or the API."""
         self._shmoo = normalize_shmoo(data)
         self._dirty = True
+
+    def add_measurement(self, *, test_num: int, name: str, site: int,
+                        value: float | None, passed: bool, wafer: str = "",
+                        part: str = "",
+                        lo: float | None = None, hi: float | None = None) -> None:
+        """Record one result that did not come from the live event bus.
+
+        Used when a saved STDF file is loaded into the same summary tables.
+        """
+        self.unit = wafer or ""
+        self._on_test_result(self.total_events + 1, {"result": {
+            "test_num": int(test_num),
+            "test_name": name,
+            "site": int(site),
+            "value": value,
+            "passed": bool(passed),
+            "part_id": part,
+            "lo_limit": lo,
+            "hi_limit": hi,
+        }})
 
 
 def _stdev(acc: _Acc) -> float | None:

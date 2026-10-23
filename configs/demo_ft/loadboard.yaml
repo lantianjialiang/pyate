@@ -1,15 +1,5 @@
 board_id: LB-DEMO-01
 site_count: 8
-pin_to_channel:
-  VDD: 1
-  VSS: 2
-  CLK: 3
-  RSTN: 4
-  EN: 5
-  SI: 6
-  SO: 7
-  Q0: 8
-  S0: 24
 relay_map:
   pmu_bus: PMU1
   dps_bus: DPS1

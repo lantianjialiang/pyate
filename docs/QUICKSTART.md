@@ -143,7 +143,7 @@ bin pareto 与 Cpk 表，比逐个跑再手工汇总省事。
 ## 7. GUI
 
 ```bash
-pyate gui --theme dark
+pyate gui
 ```
 
 页签顺序就是工作流：Config（打开/校验）→ TestFlow（勾选启停）→ Limits/Bins（改 limit）

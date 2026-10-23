@@ -162,14 +162,19 @@ class FileEditor(QWidget):
         self.kind = kind
         self._schema = dict(schema or {})
         self._data = copy.deepcopy(data)
-        self.save_btn.setEnabled(True)
+        readonly = kind == "text"
+        self.save_btn.setEnabled(not readonly)
+        self.text.setReadOnly(readonly)
         self.title.setText(f"{key}  {path}")
-        self.tabs.setTabText(1, "CSV" if kind == "csv" else "YAML")
+        self.tabs.setTabText(0, "说明" if readonly else "Form")
+        self.tabs.setTabText(1, "pattern" if readonly else ("CSV" if kind == "csv" else "YAML"))
         self._syncing = True
         self.text.setPlainText(text)
         self._syncing = False
         self._rebuild_form()
         self.status.setText("")
+        if readonly:
+            self.tabs.setCurrentIndex(0)
 
     def clear(self) -> None:
         """Forget the current document."""
@@ -178,6 +183,9 @@ class FileEditor(QWidget):
         self._data = {}
         self._schema = {}
         self.save_btn.setEnabled(False)
+        self.text.setReadOnly(False)
+        self.tabs.setTabText(0, "Form")
+        self.tabs.setTabText(1, "YAML")
         self.title.setText("select a file in the tree")
         self.text.clear()
         self._clear_form()
@@ -190,7 +198,7 @@ class FileEditor(QWidget):
 
     # ------------------------------------------------------------------ tabs
     def _on_tab(self, index: int) -> None:
-        if self._syncing or not self.key:
+        if self._syncing or not self.key or self.kind == "text":
             return
         if index == 0:
             self._pull_text()
@@ -229,6 +237,12 @@ class FileEditor(QWidget):
 
     def _rebuild_form(self) -> None:
         self._clear_form()
+        if self.kind == "text":
+            note = QLabel(str(self._data.get("note") or "") if isinstance(self._data, dict) else "")
+            note.setWordWrap(True)
+            self.form_layout.addWidget(note)
+            self.form_layout.addStretch(1)
+            return
         schema = _deref(self._schema, self._schema)
         if not isinstance(self._data, dict):
             note = QLabel("this document is not an object; edit it in the text tab")

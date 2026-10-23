@@ -17,7 +17,7 @@ handler: null
 stdf: ../demo_cp/stdf_options.yaml
 run:
   stage: CP1
-  sites: 3
+  sites: 1
   seed: 7
   temperature: null
   output_dir: out

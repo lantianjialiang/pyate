@@ -524,6 +524,9 @@ class RunController:
             "jam": bool(touchdown.xtra.get("jam")),
             "masked_sites": sorted(int(site) for site in masked),
             "contact_fail_sites": sorted(int(site) for site in contact_fail),
+            "layout": list(touchdown.xtra.get("layout") or ()),
+            "configured_layout": list(touchdown.xtra.get("configured_layout") or ()),
+            "scan": touchdown.xtra.get("scan", ""),
         })
         results = self._scheduler_run(contexts)
         results = self._apply_retest(results, contexts, unit, sampler, unit_seed)

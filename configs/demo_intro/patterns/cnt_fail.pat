@@ -1,3 +1,7 @@
+# 失败示例：复位后第一拍 SO 仍是 0，这里写成了 H。通过的向量是 cnt_basic.pat。
+# composite 是计数器加移位寄存器。复位后第一拍 SI=1，数据只进 S0，
+# SO 是移位链的最高位，这一拍仍然是 0。
+# 下面把这一拍的 SO 从 L 改成了 H。比较时期望 1、实际是 0，所以在 SO 上失败。
 pattern cnt_fail;
 pins    CLK, RSTN, EN, SI, SO, Q0, Q1, Q2, Q3, Q4, Q5, Q6, Q7, S0, S1, S2, S3, S4, S5, S6, S7;
 timing  tset_fast;

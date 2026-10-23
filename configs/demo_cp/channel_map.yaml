@@ -3,16 +3,16 @@ pins:
   type: power
   sites:
     1: 1
-    2: 49
-    3: 97
-    4: 145
+    2: 3
+    3: 5
+    4: 7
 - pin: VSS
   type: power
   sites:
     1: 2
-    2: 50
-    3: 98
-    4: 146
+    2: 4
+    3: 6
+    4: 8
 - pin: CLK
   type: in
   sites:

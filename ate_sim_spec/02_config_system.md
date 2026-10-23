@@ -5,7 +5,7 @@
 |---|---|---|
 | tester.yaml | ATE 机台配置 | name, model, num_sites_max, digital_channels, dps_channels, pmu_channels, max_vector_rate_mhz, vector_depth |
 | channel_map.yaml | 逻辑 pin ↔ 物理通道(按 site) | pin, type(io/in/out/power), site→channel |
-| loadboard.yaml | 负载板/Socket/Probecard | board_id, site_count, relay_map, pin_to_channel |
+| loadboard.yaml | 负载板/Socket/Probecard | board_id, site_count, relay_map |
 | levels.yaml | 电平集 | name, vil, vih, vol, voh, vterm, iol, ioh, vdd(nom/min/max) |
 | timing.yaml | 时序集 | period_ns, edges(drive_on/data/return/compare strobe)、timing set 名 |
 | patterns/*.pat | 向量文件 | 见 05 |

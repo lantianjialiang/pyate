@@ -47,7 +47,7 @@ flowchart LR
 |---|---|
 | `tester.yaml` | 通道数量、向量深度、仿真噪声和虚拟时间比例 |
 | `channel_map.yaml` | 引脚在每个 site 上占用哪条通道 |
-| `loadboard.yaml` | 负载板位号、site 数 |
+| `loadboard.yaml` | 负载板编号、site 数、继电器名。pin 到通道只写在 `channel_map` |
 | `levels.yaml` | 电平集：VIL/VIH/VOL/VOH 和 VDD |
 | `timing.yaml` | 时序集：周期和驱动/比较沿 |
 | `testprogram.yaml` | 各 stage 的 flow：item、test number、参数、`on_fail`、是否启用 |
@@ -77,17 +77,17 @@ pip install -e ".[dev]"
 已经安装过时：
 
 ```powershell
-pyate gui configs\demo_intro\session.yaml --theme dark
+pyate gui configs\demo_intro\session.yaml
 ```
 
 还没安装、直接从源码启动：
 
 ```powershell
 $env:PYTHONPATH = "src"
-python -m pyate.cli.main gui configs\demo_intro\session.yaml --theme dark
+python -m pyate.cli.main gui configs\demo_intro\session.yaml
 ```
 
-`--theme` 可以是 `dark` 或 `light`。不写 session 会打开空窗口，再到 Config 页 **Open...** 选择 `session.yaml`，然后 **Load**。
+默认是浅色主题。`--theme dark` 切到深色，`--theme light` 是显式指定浅色。不写 session 会打开空窗口，再到 Config 页 **Open...** 选择 `session.yaml`，然后 **Load**。
 
 命令行跑同一份示例（不打开窗口）：
 
@@ -109,13 +109,13 @@ Flow 顺序：
 | 9000 | `delay_ms` | 专门用来下断点，停在这一项前面 |
 | 9100 | `shmoo` | 3×3 的 VDD × period 扫描，跑完右侧 Shmoo 页有图 |
 
-另外有一个故意写错的 `patterns/cnt_fail.pat`，不在 flow 里，留给 Pattern 页单步调试。
+另外有一个故意写错的 `patterns/cnt_fail.pat`，不在 flow 里。Config 页的 `patterns` 下面能看到它和会通过的 `cnt_basic.pat`，失败原因写在文件开头的注释里。Pattern 页可以单步调试这份失败向量。
 
 ### 5.1 打开并确认配置
 
 启动后状态栏应类似 `demo_intro: stage CP1, 1 site(s)`。
 
-- **Config**：左边树是 session 引用的每个文件。点 `levels` 或 `run`，右边是表单和 YAML。改一个数字后 **Save file**；校验失败时下面的文本会带字段路径，磁盘上的文件不变。
+- **Config**：左边树是 session 引用的每个文件，以及 `patterns` 下的向量。`cnt_basic.pat` 是会通过的向量，`cnt_fail.pat` 是故意失败的向量；点失败的那一项，说明页写了原因：复位后第一拍 `SO` 仍是 0，文件里却写成了 `H`。点 `levels` 或 `run`，右边是表单和 YAML。改一个数字后 **Save file**；校验失败时下面的文本会带字段路径，磁盘上的文件不变。向量文件只读，不会被 Save 写成 YAML。
 - **TestFlow**：应看到 `idd_static`、`functional`、`delay_ms`、`shmoo`。取消勾选会把 `enabled` 写成 false 并保存 `testprogram.yaml`，执行时跳过该项。选中一项可以改参数和 `on_fail`，再点 **Apply to node**。
 - **Limits/Bins**：改 lo/hi 后 **Apply changes**，再在 Config 页 **Save limits** 才写回 CSV。
 
@@ -125,9 +125,9 @@ Flow 顺序：
 
 1. 打开 **Run**。
 2. 断点框输入 `9000`，点 **Set**。标签变成 `breakpoints: 9000`。
-3. 点 **Start**。flow 会先跑完 2000 和 3000，在 9000 之前停下。日志里有一行 `breakpoint hit: test 9000 ...`。
+3. 点 **Start**。上一轮的 datalog、wafer、summary 和 shmoo 会先清掉。flow 跑完 2000 和 3000 后，在 9000 之前停下。日志里有一行 `breakpoint hit: test 9000 ...`。
 4. 点 **Step**：只执行接下来的一项（9000），然后再次暂停。再 Step 一次会跑 shmoo。
-5. 点 **Resume** 会放开暂停，一直跑到结束。**Pause** 是在下一项之前停住。**Stop** 放弃这一轮。
+5. 点 **Resume** 会放开暂停，一直跑到结束。**Pause** 是在下一项之前停住。**Stop** 放弃这一轮。**Clear data** 丢掉当前结果并停掉正在跑的那一轮；断点和 site 勾选不动。
 6. **Clear** 去掉全部断点。
 
 想看“跑一项停一下”，也可以不设断点：Start 之后马上 Pause，然后反复 Step。
@@ -138,9 +138,8 @@ Flow 顺序：
 
 Start 跑完后（大约几十秒，视机器而定）：
 
-- **Wafer**：每颗 die 的颜色是 soft bin。鼠标停在 die 上可以看到坐标、bin，以及这颗的第一个失败测试和值。圆片底部只有一个很小的定位豁口。下面一条是 bin 比例。**Export wafer map PNG** 把当前图存成图片。
-- **Summary**：默认 **group by = test**，每个测试一行，列是 n、pass、fail、mean、stdev、min、max。改成 **site** 后，同一个测试按 site 拆开（这个示例只有 site 1，多 site 时用 `demo_cp`）。点一行，下面同时画该测试的 histogram、trend 和 probability。probability 的横轴是测量值，纵轴是标准正态分位；虚线是用这组数据的均值和标准差画出的参考直线。
-- **Charts**：和 Summary 下面三张图相同，测试用下拉框选，site 用 Run 页右上角的 `all sites` / `site N` 过滤。
+- **Wafer**：每颗 die 的颜色是 soft bin，边缘的 die 也是完整的方块，不会被圆边裁成一块。鼠标停在 die 上可以看到坐标、bin，以及这颗的第一个失败测试和值。圆片底部只有一个很小的定位豁口。下面一条是 bin 比例。**Export wafer map PNG** 把当前图存成图片。
+- **Summary**：默认 **group by = test**，每个测试一行。改成 **site** 按 site 拆开，改成 **wafer** 按晶圆拆开（多片 wafer 时用 `demo_cp` 的 lot）。有数值的测试会列出 mean、stdev、min、max，以及规格 lo/hi、Cp、Cpk（Cp 要上下限都有，Cpk 有一边即可；σ 用样本标准差 n−1）。点一行，下面同时画该组的 histogram、trend 和 probability。三张图上的橙色虚线是 lower limit，红色虚线是 high limit；鼠标停在柱、点或限值线上会显示对应的值。probability 的横轴是测量值，纵轴是标准正态分位；灰色虚线是这组数据的正态参考线。
 - **Shmoo**：flow 里的 9100 跑完后这里出现 3×3 的 pass/fail 色块。横轴是 period（ns），纵轴是 VDD。悬停一个格子可以看到电平和周期。**PNG** / **CSV** 导出。
 
 不想把 shmoo 放进每一颗 die 时，从 flow 里取消勾选 9100，改用 Shmoo 页的 **Run shmoo**。它只用当前 session 的 DUT、电平和 pattern，在一个 site 上扫一次，不走整片晶圆。`demo_cp` 的默认 flow 就没有 shmoo，应该用这个按钮。
@@ -162,9 +161,11 @@ Pattern 页不跑 flow，只对一个 `.pat` 做向量比较。
 
 **Batch。** **Open...** 选择 `configs\demo_batch\batch.yaml`，**Load** 后 **Run batch**。每行是一组参数扫描。结束后 **Open output** 打开该任务的输出目录。
 
+**STDF。** **Open STDF...** 选择一次运行写出的 `.stdf`。上方是文件统计：lot、job、颗数、良率、每片 wafer 的 good/parts、hard/soft bin、各记录条数。下面的表和三张图与 Run 的 Summary 相同，也可以按 test、site、wafer 分组，数据来自文件里的 PTR/FTR，不是当前这次 GUI 运行。
+
 **日志。** Run 页最下面。级别可选 ALL、INFO、ERROR。断点命中、shmoo 开始和结束、运行结束都写在这里。
 
-**主题。** 菜单 View 里切换深色和浅色。
+**主题。** 打开时是浅色。菜单 View 里可以切到深色。状态栏右侧和 Help → About 是版权信息 © lantianjialiang。页签顺序是 Config、TestFlow、Limits/Bins、Run、Pattern、STDF，Batch 在最后。
 
 多 site 的完整 CP 用 `configs\demo_cp\session.yaml`（300 mm、4 site）。FT、tray、卡料和重测用 `configs\demo_ft\session.yaml`，Run 页的 **Tray** 每个 site 一格，颜色是最近一颗的 bin，jam 会标出来。
 
@@ -198,7 +199,7 @@ pyate lot run configs\demo_cp\session.yaml --stages CP1 --stage-session FT1=conf
 | `stats.json` | 每个测试的均值、σ、Cpk |
 | `*.stdf` | STDF V4，可用 `pyate stdf verify` 检查 |
 
-GUI 的 Summary 是**这一轮已经收到的测量**的在线统计，按测试（以及可选的 site）汇总。它和 `summary.json` 里的 lot 级良率不是同一张表：lot 级看有多少颗 pass，测试级看某一个 test number 的分布。
+GUI 的 Summary 是**这一轮已经收到的测量**的在线统计，按测试（以及可选的 site 或 wafer）汇总 mean、stdev 和 Cpk。它和 `summary.json` 里的 lot 级良率不是同一张表：lot 级看有多少颗 pass，测试级看某一个 test number 的分布。`stats.json` 是同一套 Cp/Cpk 写到文件里的版本。
 
 ## 9. 三套示例怎么选
 

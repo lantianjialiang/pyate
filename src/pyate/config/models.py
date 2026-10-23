@@ -195,7 +195,6 @@ class LoadboardConfig(_Strict):
 
     board_id: str = "LB-001"
     site_count: int = 4
-    pin_to_channel: dict[str, int] = Field(default_factory=dict)
     relay_map: dict[str, str] = Field(default_factory=dict)
 
 

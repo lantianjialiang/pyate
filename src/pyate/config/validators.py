@@ -82,6 +82,7 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
         report.error(
             f"channel_map: {site_count} sites requested but tester.num_sites_max={tester.num_sites_max}"
         )
+    power_owner: dict[int, str] = {}
     for site in range(1, site_count + 1):
         used: dict[int, str] = {}
         for pin, (entry, bit) in expanded.items():
@@ -89,10 +90,12 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
             if channel is None:
                 report.error(f"channel_map: pin '{pin}' has no channel for site {site}")
                 continue
-            if channel < 1 or channel > tester.digital_channels:
+            pool = tester.dps_channels if entry.type == "power" else tester.digital_channels
+            kind = "DPS" if entry.type == "power" else "digital"
+            if channel < 1 or channel > pool:
                 report.error(
                     f"channel_map: pin '{pin}' site {site} channel {channel} outside "
-                    f"1..{tester.digital_channels}"
+                    f"1..{pool} ({kind})"
                 )
             if channel in used:
                 report.error(
@@ -100,6 +103,14 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
                     f"('{used[channel]}' and '{pin}')"
                 )
             used[channel] = pin
+            if entry.type == "power":
+                owner = f"{pin} site {site}"
+                previous = power_owner.get(channel)
+                if previous is not None:
+                    report.error(
+                        f"channel_map: DPS channel {channel} used by {previous} and {owner}"
+                    )
+                power_owner[channel] = owner
 
     if session.loadboard is not None:
         board = session.loadboard
@@ -107,10 +118,6 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
             report.warn(
                 f"loadboard: site_count={board.site_count} differs from run sites={site_count}"
             )
-        declared = set(expanded)
-        missing = [pin for pin in board.pin_to_channel if pin not in declared]
-        if missing:
-            report.error(f"loadboard: pin(s) not in channel_map: {', '.join(sorted(missing))}")
 
 
 def _validate_levels_timing(session: LoadedSession, report: ValidationReport) -> None:

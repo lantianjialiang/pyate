@@ -9,6 +9,7 @@ from .lot import LotReport, LotRunner, StageOutcome, run_lot
 from .pattern import PatternRunReport, available_models, run_pattern
 from .session import ConfigProblem, FileDocument, SaveResult, Session, SessionInfo
 from .shmoo import normalize_shmoo, run_shmoo, shmoo_csv
+from .stdf_view import inspect_stdf
 
 __all__ = [
     "BatchRunner",
@@ -30,6 +31,7 @@ __all__ = [
     "StageOutcome",
     "available_models",
     "create_run",
+    "inspect_stdf",
     "load_batch",
     "normalize_shmoo",
     "run_lot",
