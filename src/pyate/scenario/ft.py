@@ -53,6 +53,7 @@ class FtScenario:
                 parts, self.handler, self.sites, tray_id=tray_id,
                 seed=self.seed + tray_index * 104729,
             )
+            cols, rows = handler.grid()
             yield UnitPlan(
                 unit_id=tray_id,
                 kind="tray",
@@ -62,7 +63,10 @@ class FtScenario:
                 meta={
                     "tray": tray_id,
                     "parts": parts,
-                    "index_time_ms": float(self.handler.cycle_time_ms),
+                    "index_time_ms": float(self.handler.cycle_time_ms + self.handler.index_time_ms),
                     "tray_capacity": self.parts_per_tray,
+                    "tray_cols": cols,
+                    "tray_rows": rows,
+                    "tray_parts": len(parts),
                 },
             )

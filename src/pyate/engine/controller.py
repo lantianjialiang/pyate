@@ -21,7 +21,8 @@ from .context import PartResult, RunContext, SiteContext, TouchdownInfo
 from .events import EventBus, EventKind
 from .retest import RetestConfig, merge_attempt, should_retest
 from .executor import FlowExecutor
-from .site import SiteScheduler, ThroughputStats
+from .metrics import EquipmentStats
+from .site import SiteScheduler
 from ..scenario.base import UnitPlan
 
 __all__ = ["UnitSummary", "RunSummary", "RunController", "DatalogSink"]
@@ -360,10 +361,15 @@ class RunController:
             change_time_ms=unit.change_time_ms,
             meta={k: v for k, v in unit.meta.items() if k not in ("wafer_map", "die_filter")},
         )
-        self.events.publish(EventKind.UNIT_START, {"unit": unit.unit_id, "kind": unit.kind})
+        unit_event = {"unit": unit.unit_id, "kind": unit.kind}
+        if unit.kind == "tray":
+            unit_event["tray_cols"] = int(unit.meta.get("tray_cols") or 0)
+            unit_event["tray_rows"] = int(unit.meta.get("tray_rows") or 0)
+            unit_event["tray_parts"] = int(unit.meta.get("tray_parts") or 0)
+        self.events.publish(EventKind.UNIT_START, unit_event)
         self.events.publish(
             EventKind.WAFER_START if unit.kind == "wafer" else EventKind.UNIT_START,
-            {"unit": unit.unit_id},
+            dict(unit_event),
         )
         for sink in self.sinks:
             self._notify(sink, "on_unit_start", unit)
@@ -380,6 +386,8 @@ class RunController:
             skip_touchdowns = int(self._resume_state.get("touchdowns_done", 0))
         touchdowns = list(unit.touchdowns)
         unit_start = __import__("time").time()
+        live_sites = max(1, self.site_count - len(self.session.run.disabled_sites))
+        equipment = EquipmentStats(sites=live_sites)
         for touch_index, touchdown in enumerate(touchdowns):
             if self._stop.is_set():
                 break
@@ -407,33 +415,34 @@ class RunController:
                 for sink in self.sinks:
                     self._notify(sink, "on_part", part, unit)
             unit_summary.test_time_ms += touchdown_ms
+            jam_ms = 0.0
             if touchdown.xtra.get("jam"):
-                recovery = float(touchdown.xtra.get("jam_recovery_ms", 0.0))
-                self.hal.add_time(1, recovery)
+                jam_ms = float(touchdown.xtra.get("jam_recovery_ms", 0.0))
+                self.hal.add_time(1, jam_ms)
                 self.events.publish(EventKind.LOG, {"message": "handler jam recovered",
                                                     "unit": unit.unit_id})
+            tested_now = sum(1 for part in parts if not part.skipped)
+            passed_now = sum(1 for part in parts if not part.skipped and part.passed)
+            equipment.add_touchdown(
+                tested=tested_now,
+                passed=passed_now,
+                test_ms=touchdown_ms,
+                index_ms=float(touchdown.index_time_ms),
+                jam_ms=jam_ms,
+            )
             self._save_resume_state(unit_index, touch_index + 1)
-            done = max(1, touch_index + 1 - skip_touchdowns)
-            elapsed_ms = (__import__("time").time() - unit_start) * 1000.0
-            live_sites = max(1, self.site_count - len(self.session.run.disabled_sites))
-            uph = ThroughputStats(
-                live_sites,
-                elapsed_ms / done,
-                float(touchdown.index_time_ms),
-            ).uph
+            figures = equipment.to_dict()
             self.events.publish(EventKind.PROGRESS, {
                 "unit": unit.unit_id,
                 "touchdown": touch_index + 1,
                 "touchdowns": len(touchdowns),
-                "uph": round(uph, 2),
+                "uph": figures["uph"],
+                "equipment": figures,
             })
         elapsed = (__import__("time").time() - unit_start) * 1000.0
-        count = max(1, len(touchdowns))
-        unit_summary.uph = ThroughputStats(
-            self.site_count,
-            unit_summary.test_time_ms / count,
-            float(unit.meta.get("index_time_ms", 0.0)),
-        ).uph
+        figures = equipment.to_dict()
+        unit_summary.uph = float(figures["uph"])
+        unit_summary.meta["equipment"] = figures
         unit_summary.meta["wall_ms"] = round(elapsed, 3)
         unit_summary.meta["touchdowns"] = len(touchdowns)
         unit_summary.meta["wafer_id"] = unit.unit_id

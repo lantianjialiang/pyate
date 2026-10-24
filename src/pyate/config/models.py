@@ -366,6 +366,8 @@ class HandlerConfig(_Strict):
     index_time_ms: float = 0.0
     jam_prob: float = 0.0
     contact_fail_prob: float = 0.002
+    tray_cols: int = 20
+    tray_rows: int = 25
     tray_capacity: int = 500
     temperature: float = 25.0
     jam_recovery_ms: float = 30_000.0

@@ -22,12 +22,27 @@ class HandlerSimulator:
         self.tray_id = tray_id
         self.rng = random.Random(seed ^ 0xBEEF)
 
+    def grid(self) -> tuple[int, int]:
+        """Input-tray columns and rows. Rows grow when the lot exceeds the grid."""
+        cols = max(1, int(self.config.tray_cols))
+        rows = max(1, int(self.config.tray_rows))
+        count = len(self.parts)
+        if cols * rows < count:
+            rows = (count + cols - 1) // cols
+        return cols, rows
+
     def touchdowns(self) -> Iterator[TouchdownInfo]:
-        """Chunk the tray into touchdowns; the tail touchdown masks spare sites."""
+        """Pick ``sites`` slots at a time, left to right, top to bottom.
+
+        The last pick masks the sites that have no part. ``x``/``y`` are the
+        tray column and row, so a retest returns to the same slot.
+        """
+        cols, rows = self.grid()
         for touch_id, start in enumerate(range(0, len(self.parts), self.sites), start=1):
             chunk = self.parts[start:start + self.sites]
             entries = tuple(
-                (slot, 0, 0, part_id) for slot, part_id in enumerate(chunk, start=1)
+                (offset + 1, (start + offset) % cols, (start + offset) // cols, part_id)
+                for offset, part_id in enumerate(chunk)
             )
             jam = self.config.jam_prob > 0 and self.rng.random() < self.config.jam_prob
             prob = float(getattr(self.config, "contact_fail_prob", 0.0) or 0.0)
@@ -42,6 +57,9 @@ class HandlerSimulator:
                 index_time_ms=self.config.cycle_time_ms + self.config.index_time_ms,
                 xtra={
                     "tray": self.tray_id,
+                    "tray_cols": cols,
+                    "tray_rows": rows,
+                    "slot_start": start,
                     "jam": jam,
                     "jam_recovery_ms": self.config.jam_recovery_ms if jam else 0.0,
                     "contact_fail_sites": contact_fail,

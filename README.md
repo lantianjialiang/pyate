@@ -6,7 +6,7 @@
 
 不需要任何真实硬件：DPS/PMU/Relay/Digital 通道全部是虚拟仪器，DUT 是数字行为模型，
 Prober/Handler 是带接触不良、卡料等真实故障的模拟器。同一个 `seed` 下整条链路逐记录可复现，
-因此适合做测试程序调试、datalog 格式验证、良率/UPH 评估与流水线集成联调。
+因此适合做测试程序调试、datalog 格式验证、良率/UPH/OEE 评估与流水线集成联调。
 
 © lantianjialiang. Released under the MIT License.
 
@@ -21,14 +21,14 @@ Prober/Handler 是带接触不良、卡料等真实故障的模拟器。同一�
 | 良率采样 | 空间相关良率（边缘加权、簇状失效），逐 die 独立采样 |
 | TestItem | 13 种内置项：`continuity` `leakage_ih_il` `idd_static` `idd_dynamic` `vol_voh` `functional` `vdd_min_search` `fmax_search` `shmoo` `sram_march` `power_up_down` `delay_ms` `user_code`，插件可加 |
 | TestFlow | 顺序/`group`/`if-then-else` 分支/`loop`/`goto_bin`/`on_fail`（continue/stop/retest）/启用位/`only`/`skip` |
-| 多 Site | `sequential/thread/process(退化为线程)/async`，item 级 `SiteBarrier` 同步、site 崩溃隔离、UPH 估算 |
+| 多 Site | `sequential/thread/process(退化为线程)/async`，item 级 `SiteBarrier` 同步、site 崩溃隔离。UPH 与 OEE 按模型时间估算（测试、index、卡料恢复） |
 | CP | 300/150 mm 圆形 wafer map、die 网格、notch、skip list、edge exclusion、touchdown 扫描、binmap（txt/svg/csv） |
-| FT | Handler 循环、tray/part 编号、jam 与 contact fail、重测（bins/max_retries） |
+| FT | 输入 tray 按槽取放（未测 / 测试中 / 已取走）、site 插座、输出 hard bin。`demo_ft` 是 20×25 槽、每次 8 site、2 盘 × 500 颗。含 jam、contact fail、重测 |
 | Lot 流转 | `CP1 → CP2 → FT1` 跨阶段，KGD（Known Good Die）逐级收窄，累计良率报告 |
 | 批量 | `batch.yaml` 参数扫（笛卡尔积）、串行/线程/进程、`fail_fast`、聚合 yield/pareto/Cpk |
 | STDF | 自研 V4 writer（FAR/ATR/MIR/SDR/WIR/WCR/PIR/PTR/FTR/PRR/TSR/HBR/SBR/PCR/MRR），可 gzip、大小端；`reader_check` + pystdf 交叉校验 |
 | Datalog | CSV、Text、JSONL（插件）、`stats.json`（Cpk/直方图）、`summary.json` |
-| GUI | 7 个页签（Config / TestFlow / Limits/Bins / Run / Pattern / STDF / Batch）、实时 datalog、wafer map、bin bar、shmoo、深浅主题、wafer map 导出 PNG |
+| GUI | 7 个页签（Config / TestFlow / Limits/Bins / Run / Pattern / STDF / Batch）。Run 页有 datalog、Summary（可按 site / wafer / part 组合，含 mean / stdev / Cp / Cpk）、限值线、wafer、Tray、净 UPH / gross / OEE |
 | 插件 | pluggy hookspec + 目录扫描/entry points，`pyate plugin new` 脚手架，示例 ADC DUT 与 JSONL sink |
 
 ## 安装
@@ -77,6 +77,7 @@ PowerShell 不会在当前目录里搜索命令，所以要先进入目录，并
 ```powershell
 cd dist\pyate
 .\pyate-gui.exe configs\demo_intro\session.yaml
+.\pyate-gui.exe configs\demo_ft\session.yaml
 .\pyate.exe config validate configs\demo_cp\session.yaml
 .\pyate.exe run configs\demo_intro\session.yaml
 ```
@@ -109,7 +110,13 @@ $env:PYTHONPATH = "src"
 python -m pyate.cli.main run configs\demo_intro\session.yaml
 ```
 
-FT 示例把 session 换成 `configs\demo_ft\session.yaml`。其余子命令见下面的快速开始。
+FT、输入 tray 和 OEE 用 `configs\demo_ft\session.yaml`（打包后同样先 `cd dist\pyate`，再 `.\pyate-gui.exe configs\demo_ft\session.yaml`）。打开后到 **Run** 页点 **Start**。第一抓之后会切到 **Tray**：
+
+- 输入盘按 `handler.tray_cols` × `tray_rows` 画槽。`demo_ft` 是 20×25，和 `parts_per_tray: 500` 对齐。取料从左到右、从上到下，每次取 `layout` 个 site（4×2，共 8）。最后一抓只有 4 颗，空出来的 site 被 mask。
+- 槽的颜色是未测、测试中、已取走。下面一行是各 site 状态，再下面是输出 hard bin 的累计颗数。重测回到原来的槽，并从上一个 hard bin 里移走，避免计两次。
+- 顶上 `uph` 是净产能，`gross` 只计测试和 index。`oee` 显示百分数，后面的 `A/P/Q` 是可用率、性能、质量。时间来自模型：每个 touchdown 加上测试时间和 index（`cycle_time_ms` + `index_time_ms`，示例里 index 是 180 ms）；发生卡料再加 `jam_recovery_ms`（示例 30000 ms）。一次卡料会把可用率拉低。500 颗对 8 site 的尾批不满，性能会略低于满载。
+
+`summary.json` 和每个 unit 的 `*_summary.json` 里的 `uph` 是同一套净 UPH。gross、理论 UPH 和 A/P/Q 在界面上随着 PROGRESS 更新。其余子命令见下面的快速开始。
 
 ## 快速开始
 
@@ -142,8 +149,8 @@ pyate pattern run configs/demo_cp/patterns/cnt_basic.pat --dut counter --cycles 
 pyate gui configs/demo_cp/session.yaml
 ```
 
-`pyate run` 会打印每个 unit 的 tested/passed/yield/UPH 与产物路径；`--json` 输出机器可读结果，
-`--no-stdf` 跳过 STDF，`--resume` 从上次 touchdown 续跑。
+`pyate run` 会打印每个 unit 的 tested/passed/yield/净 UPH 与产物路径；`--json` 输出机器可读结果，
+`--no-stdf` 跳过 STDF，`--resume` 从上次 touchdown 续跑。这里的 UPH 用模型时间，和界面上的净 `uph` 相同。
 
 ### 产物
 
@@ -151,7 +158,7 @@ pyate gui configs/demo_cp/session.yaml
 
 ```
 out/cli_run/
-├── summary.json        # 整轮汇总（yield/UPH/bin/单位）
+├── summary.json        # 整轮汇总（yield/净 UPH/bin/单位）
 ├── run_snapshot.yaml   # 生效配置快照（复现用）
 ├── LOT-CP-0001_W01_CP1.stdf   # STDF V4
 ├── W01_summary.json    # 单 wafer 汇总
@@ -240,7 +247,7 @@ pytest tests/gui -q           # E2E-GUI（QT_QPA_PLATFORM=offscreen）
 | ![Config](docs/images/gui_1_config.png) | ![TestFlow](docs/images/gui_2_testflow.png) |
 | Config：session 全部配置项，键值分列 | TestFlow：stage 的 flow 树，勾选框控制启用位 |
 | ![Limits](docs/images/gui_3_limits.png) | ![Run](docs/images/gui_7_run_done.png) |
-| Limits/Bins：limits 可直接改并回写 CSV | Run：实时 datalog + wafer map + bin bar |
+| Limits/Bins：limits 可直接改并回写 CSV | Run：datalog、Summary、wafer / tray、OEE |
 | ![Batch](docs/images/gui_5_batch.png) | ![Pattern](docs/images/gui_6_pattern.png) |
 | Batch：job 状态与良率汇总 | Pattern：直接跑 `.pat`，报第一个失败周期 |
 

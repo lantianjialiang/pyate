@@ -97,6 +97,28 @@ def test_config_panel_shows_the_configuration_tree(window: MainWindow) -> None:
     assert any("session" in label.lower() or "tester" in label.lower() for label in labels)
 
 
+def test_tray_widget_paints_input_slots_and_output_bins(qapp: QApplication) -> None:
+    from pyate.gui.widgets import TrayWidget
+
+    widget = TrayWidget()
+    widget.resize(420, 320)
+    widget.set_data({
+        "title": "T01", "cols": 5, "rows": 2, "tested": 1, "total": 10, "jams": 1,
+        "slots": [
+            {"x": 0, "y": 0, "state": "picked", "part_id": "P00"},
+            {"x": 1, "y": 0, "state": "testing", "part_id": "P01"},
+            {"x": 2, "y": 0, "state": "untested", "part_id": ""},
+        ],
+        "sites": [{"site": 1, "status": "pass"}, {"site": 2, "status": "masked"}],
+        "output": [{"bin": 1, "count": 3}],
+    })
+    widget.show()
+    qapp.processEvents()
+    widget.repaint()
+    assert widget._hits
+    widget.close()
+
+
 def test_config_tree_shows_pass_and_fail_patterns(qapp: QApplication) -> None:
     win = MainWindow(str(CONFIGS / "demo_intro" / "session.yaml"))
     try:

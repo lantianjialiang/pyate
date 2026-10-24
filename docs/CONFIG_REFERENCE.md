@@ -155,12 +155,13 @@ process: {vth_sigma: 0.03, idd_sigma: 0.05, leak_sigma: 0.08}
 | handler 字段 | 默认 | 说明 |
 |---|---|---|
 | `layout.cols/rows` | 2/2 | 同测 socket 布局 |
-| `cycle_time_ms` | 180 | 每个 part 的机械周期 |
-| `index_time_ms` | 0 | 换 tray 索引 |
+| `cycle_time_ms` | 180 | 每次取放（一个 touchdown）的机械时间 |
+| `index_time_ms` | 0 | 额外索引时间，加在 `cycle_time_ms` 上 |
 | `jam_prob` | 0.0 | 卡料概率 |
 | `contact_fail_prob` | 0.002 | 接触不良概率 |
+| `tray_cols` / `tray_rows` | 20 / 25 | 输入 tray 的槽位网格。按行从左到右每次取 `layout` 个 site，尾批不足的 site 被 mask |
 | `tray_capacity` | 500 | 每 tray 容量 |
-| `jam_recovery_ms` | 30000 | 卡料恢复耗时 |
+| `jam_recovery_ms` | 30000 | 卡料恢复耗时，计入 OEE 的停机 |
 
 | lot 字段 | 默认 | 说明 |
 |---|---|---|

@@ -3,6 +3,8 @@ layout:
   rows: 2
 cycle_time_ms: 180.0
 jam_prob: 0.001
+tray_cols: 20
+tray_rows: 25
 tray_capacity: 500
 temperature: 25.0
 jam_recovery_ms: 30000.0

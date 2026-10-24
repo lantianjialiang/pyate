@@ -944,8 +944,10 @@ class RunPanel(QWidget):
         self.bins_label.setObjectName("stat")
         self.uph_label = QLabel("uph: -")
         self.uph_label.setObjectName("stat")
+        self.oee_label = QLabel("oee: -")
+        self.oee_label.setObjectName("stat")
         for label in (self.unit_label, self.parts_label, self.yield_label,
-                      self.bins_label, self.uph_label):
+                      self.bins_label, self.uph_label, self.oee_label):
             stats_row.addWidget(label)
         stats_row.addStretch(1)
         self.site_filter = QComboBox()
@@ -1067,6 +1069,7 @@ class RunPanel(QWidget):
 
         self.tray = TrayWidget()
         self.view_tabs.addTab(self.tray, "Tray")
+        self._tray_shown = False
         splitter.addWidget(self.view_tabs)
         splitter.setSizes([620, 420])
         layout.addWidget(splitter, 1)
@@ -1160,6 +1163,13 @@ class RunPanel(QWidget):
                 f"prober layout {prober.layout.cols}x{prober.layout.rows} "
                 f"scan {prober.scan}  sites {self.sites_spin.value()}"
             )
+        handler = getattr(session.loaded, "handler", None)
+        if handler is not None:
+            self.log_view.appendPlainText(
+                f"handler tray {handler.tray_cols}x{handler.tray_rows} "
+                f"pick {handler.layout.cols * handler.layout.rows}  "
+                f"sites {self.sites_spin.value()}"
+            )
         handle.start()
 
     def clear_results(self) -> None:
@@ -1181,6 +1191,8 @@ class RunPanel(QWidget):
         self.yield_label.setText("yield: -")
         self.bins_label.setText("bins: 0")
         self.uph_label.setText("uph: -")
+        self.oee_label.setText("oee: -")
+        self._tray_shown = False
         self._summary_keys = []
         self.summary_table.setRowCount(0)
         self.datalog_count.setText("0 rows")
@@ -1386,7 +1398,20 @@ class RunPanel(QWidget):
         self.parts_label.setText(f"parts: {snapshot['parts']}")
         self.yield_label.setText(f"yield: {snapshot['yield_pct']:.2f} %")
         self.bins_label.setText(f"bins: {len(snapshot['bins'])}")
-        self.uph_label.setText(f"uph: {snapshot.get('uph', 0):.1f}")
+        self.uph_label.setText(
+            f"uph: {snapshot.get('uph', 0):.0f}"
+            f"  gross {snapshot.get('gross_uph', 0):.0f}"
+        )
+        self.oee_label.setText(
+            f"oee: {snapshot.get('oee', 0):.1f}%"
+            f"  A/P/Q {snapshot.get('availability', 0):.0f}"
+            f"/{snapshot.get('performance', 0):.0f}"
+            f"/{snapshot.get('quality', 0):.0f}"
+            f"  jam {snapshot.get('jams', 0)}"
+        )
+        if snapshot.get("unit_kind") == "tray" and snapshot.get("touchdowns") and not self._tray_shown:
+            self.view_tabs.setCurrentWidget(self.tray)
+            self._tray_shown = True
         if snapshot["touchdowns"]:
             pct = 100.0 * snapshot["touchdown"] / snapshot["touchdowns"]
             self.progress.setValue(int(min(100, max(0, pct))))
@@ -1401,7 +1426,7 @@ class RunPanel(QWidget):
         plot = self.vm.shmoo()
         self.shmoo.set_data(plot if plot.get("pass") else {})
         self._show_footprint()
-        self.tray.set_data(self.vm.touch, self.vm.site_state)
+        self.tray.set_data(self.vm.tray_view())
         self._fill_summary()
         for entry in self.vm.take_logs():
             if self._log_level != "ALL" and entry.level != self._log_level:

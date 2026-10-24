@@ -188,7 +188,16 @@ class RunViewModel:
         self.dies: dict[tuple[int, int], int] = {}
         self.die_info: dict[tuple[int, int], dict[str, Any]] = {}
         self.site_state: dict[int, dict[str, Any]] = {}
+        self.site_status: dict[int, str] = {}
         self.touch: dict[str, Any] = {}
+        self.tray_cols = 0
+        self.tray_rows = 0
+        self.tray_total = 0
+        self.tray_slots: dict[tuple[int, int], dict[str, Any]] = {}
+        self.output_bins: dict[int, int] = {}
+        self._sorted_bin: dict[str, int] = {}
+        self.jams = 0
+        self.metrics: dict[str, Any] = {}
         self.unit = ""
         self.unit_kind = ""
         self.touchdown = 0
@@ -218,6 +227,7 @@ class RunViewModel:
             self.unit_kind = str(data.get("kind", self.unit_kind))
             self.dies = {}
             self.die_info = {}
+            self._load_tray(data)
             self.running = True
         elif kind == EventKind.UNIT_END.value:
             self._dirty = True
@@ -226,11 +236,17 @@ class RunViewModel:
             self.touch = dict(data)
             if data.get("kind"):
                 self.unit_kind = str(data.get("kind"))
+            self._on_touchdown(data)
             self._dirty = True
         elif kind == EventKind.PROGRESS.value:
             self.touchdowns = int(data.get("touchdowns", self.touchdowns) or 0)
             if data.get("uph") is not None:
                 self.uph = float(data.get("uph") or 0.0)
+            equipment = data.get("equipment")
+            if isinstance(equipment, dict):
+                self.metrics = dict(equipment)
+                self.jams = int(equipment.get("jams") or 0)
+                self.uph = float(equipment.get("uph") or self.uph)
             self._dirty = True
         elif kind == EventKind.LOT_START.value:
             self.running = True
@@ -316,11 +332,97 @@ class RunViewModel:
             "fail_value": part.get("first_fail_value"),
         }
         self.site_state[site] = info
+        self.site_status[site] = "pass" if info["passed"] else "fail"
         if self.unit_kind == "wafer":
             coord = (int(part.get("x") or 0), int(part.get("y") or 0))
             self.dies[coord] = soft
             self.die_info[coord] = info
+        if self.unit_kind == "tray":
+            self._pick_slot(part, info)
         self._dirty = True
+
+    def _load_tray(self, data: dict[str, Any]) -> None:
+        """Build the input-tray grid for a new tray. Empty when this is a wafer."""
+        cols = int(data.get("tray_cols") or 0)
+        rows = int(data.get("tray_rows") or 0)
+        total = int(data.get("tray_parts") or 0)
+        if cols <= 0 or rows <= 0 or total <= 0:
+            return
+        self.tray_cols = cols
+        self.tray_rows = rows
+        self.tray_total = total
+        self.tray_slots = {}
+        self.site_status = {}
+        for index in range(total):
+            col = index % cols
+            row = index // cols
+            self.tray_slots[(col, row)] = {
+                "state": "untested", "part_id": "", "site": 0, "passed": None,
+            }
+
+    def _on_touchdown(self, data: dict[str, Any]) -> None:
+        """Mark the slots now in the socket, and mask the sites with no part."""
+        active: set[int] = set()
+        for slot in data.get("slots") or []:
+            site = int(slot.get("site") or 0)
+            active.add(site)
+            key = (int(slot.get("x") or 0), int(slot.get("y") or 0))
+            cell = self.tray_slots.get(key)
+            if cell is None:
+                continue
+            cell["state"] = "testing"
+            cell["part_id"] = str(slot.get("part_id") or "")
+            cell["site"] = site
+            self.site_status[site] = "testing"
+        for site in data.get("masked_sites") or []:
+            number = int(site)
+            if number not in active:
+                self.site_status[number] = "masked"
+
+    def _pick_slot(self, part: dict[str, Any], info: dict[str, Any]) -> None:
+        """Move a finished part off the input tray and into its hard-bin pocket."""
+        key = (int(part.get("x") or 0), int(part.get("y") or 0))
+        cell = self.tray_slots.get(key)
+        if cell is not None:
+            cell["state"] = "picked"
+            cell["part_id"] = info["part_id"]
+            cell["passed"] = info["passed"]
+            cell["bin"] = int(part.get("hard_bin") or part.get("soft_bin") or 0)
+        hard = int(part.get("hard_bin") or 0)
+        previous = self._sorted_bin.get(info["part_id"])
+        if previous is not None:
+            left = self.output_bins.get(previous, 0) - 1
+            if left > 0:
+                self.output_bins[previous] = left
+            else:
+                self.output_bins.pop(previous, None)
+        self._sorted_bin[info["part_id"]] = hard
+        self.output_bins[hard] = self.output_bins.get(hard, 0) + 1
+
+    def tray_view(self) -> dict[str, Any]:
+        """Snapshot the Tray page paints: input grid, sites, output pockets."""
+        return {
+            "title": self.unit,
+            "cols": self.tray_cols,
+            "rows": self.tray_rows,
+            "total": self.tray_total,
+            "tested": sum(1 for cell in self.tray_slots.values() if cell.get("state") == "picked"),
+            "jams": self.jams,
+            "jam_now": bool(self.touch.get("jam")),
+            "slots": [
+                {"x": x, "y": y, **cell}
+                for (x, y), cell in self.tray_slots.items()
+            ],
+            "sites": [
+                {"site": site, "status": status}
+                for site, status in sorted(self.site_status.items())
+            ],
+            "output": [
+                {"bin": hard, "count": count}
+                for hard, count in sorted(self.output_bins.items())
+                if count
+            ],
+        }
 
     def _add_log(self, level: str, message: str) -> None:
         if not message:
@@ -364,6 +466,13 @@ class RunViewModel:
             "touchdown": self.touchdown,
             "touchdowns": self.touchdowns,
             "uph": round(self.uph, 2),
+            "gross_uph": round(float(self.metrics.get("gross_uph") or 0.0), 2),
+            "theoretical_uph": round(float(self.metrics.get("theoretical_uph") or 0.0), 2),
+            "oee": round(float(self.metrics.get("oee") or 0.0) * 100.0, 2),
+            "availability": round(float(self.metrics.get("availability") or 0.0) * 100.0, 2),
+            "performance": round(float(self.metrics.get("performance") or 0.0) * 100.0, 2),
+            "quality": round(float(self.metrics.get("quality") or 0.0) * 100.0, 2),
+            "jams": self.jams,
             "unit_kind": self.unit_kind,
             "running": self.running,
             "finished": self.finished,

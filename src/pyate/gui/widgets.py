@@ -663,66 +663,144 @@ class ProbabilityWidget(_StatChart):
         self._tip(event, text)
 
 
+_SLOT_COLOR = {
+    "untested": "#c5ced6",
+    "testing": "#e6a817",
+    "picked": "#8aa0b2",
+}
+_SITE_COLOR = {
+    "idle": "#dfe4ea",
+    "testing": "#e6a817",
+    "pass": "#2e9e5b",
+    "fail": "#c0392b",
+    "masked": "#95a5a6",
+}
+
+
 class TrayWidget(QWidget):
-    """Handler tray: one cell per site, coloured by the latest part result."""
+    """FT handler view: input tray, the sockets, and the output bin pockets."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._slots: list[dict[str, Any]] = []
-        self._state: dict[int, dict[str, Any]] = {}
-        self._masked: set[int] = set()
-        self._jam = False
-        self._title = ""
-        self.setMinimumSize(220, 160)
+        self._view: dict[str, Any] = {}
+        self._hits: list[tuple[QRectF, str]] = []
+        self.setMinimumSize(280, 240)
+        self.setMouseTracking(True)
 
-    def set_data(self, touch: Mapping[str, Any], state: Mapping[int, Mapping[str, Any]]) -> None:
-        """``touch`` is the latest TOUCHDOWN payload; ``state`` is per-site results."""
-        self._slots = [dict(slot) for slot in touch.get("slots") or []]
-        self._masked = {int(site) for site in touch.get("masked_sites") or []}
-        self._jam = bool(touch.get("jam"))
-        tray = touch.get("tray") or touch.get("unit") or ""
-        touchdown = touch.get("touchdown") or ""
-        self._title = f"{tray}  touchdown {touchdown}" + ("  JAM" if self._jam else "")
-        self._state = {int(site): dict(info) for site, info in state.items()}
+    def set_data(self, view: Mapping[str, Any], state: Mapping[int, Mapping[str, Any]] | None = None) -> None:
+        """Replace the painted snapshot. ``state`` is ignored; the view carries site status."""
+        self._view = dict(view or {})
         self.update()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))
-        painter.setPen(QColor(palette["text"]))
-        font = QFont()
-        font.setPointSize(8)
-        painter.setFont(font)
-        if not self._slots and not self._title:
+        self._hits = []
+        cols = int(self._view.get("cols") or 0)
+        rows = int(self._view.get("rows") or 0)
+        if cols <= 0 or rows <= 0:
             painter.setPen(QColor(palette["muted"]))
             painter.drawText(self.rect(), Qt.AlignCenter, "no tray data")
             return
-        painter.drawText(QRectF(8, 4, self.width() - 16, 16), Qt.AlignLeft, self._title or "tray")
-        sites = self._slots or [{"site": site} for site in sorted(self._state)]
-        count = max(1, len(sites))
-        cols = max(1, int(count ** 0.5 + 0.999))
-        rows = (count + cols - 1) // cols
-        left, top = 8.0, 24.0
-        cell_w = max(1.0, (self.width() - 16) / cols)
-        cell_h = max(1.0, (self.height() - 32) / rows)
+        font = QFont()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.setPen(QColor(palette["text"]))
+        title = str(self._view.get("title") or "tray")
+        tested = int(self._view.get("tested") or 0)
+        total = int(self._view.get("total") or 0)
+        jams = int(self._view.get("jams") or 0)
+        jam = "  JAM" if self._view.get("jam_now") else ""
+        painter.drawText(QRectF(8, 2, self.width() - 16, 16), Qt.AlignLeft,
+                         f"{title}   {tested}/{total}{jam}   jam {jams}")
+        self._legend(painter, palette, 20)
+        grid_top = 40.0
+        grid_bottom = self.height() - 78.0
+        self._grid(painter, palette, cols, rows, grid_top, max(grid_top + 20, grid_bottom))
+        self._sites(painter, palette, self.height() - 72.0)
+        self._output(painter, palette, self.height() - 40.0)
+
+    def _legend(self, painter: QPainter, palette: dict[str, str], top: float) -> None:
+        painter.setPen(QColor(palette["text"]))
+        x = 8.0
+        for name, colour in (("未测", _SLOT_COLOR["untested"]),
+                             ("测试中", _SLOT_COLOR["testing"]),
+                             ("已取走", _SLOT_COLOR["picked"])):
+            painter.fillRect(QRectF(x, top, 12, 12), QColor(colour))
+            painter.drawText(QRectF(x + 16, top - 2, 52, 16), Qt.AlignLeft, name)
+            x += 72
+
+    def _grid(self, painter: QPainter, palette: dict[str, str], cols: int, rows: int,
+              top: float, bottom: float) -> None:
+        cells = {
+            (int(slot.get("x") or 0), int(slot.get("y") or 0)): slot
+            for slot in self._view.get("slots") or []
+        }
+        left = 8.0
+        width = max(1.0, self.width() - 16.0)
+        height = max(1.0, bottom - top)
+        cell_w = width / cols
+        cell_h = height / rows
+        for row in range(rows):
+            for col in range(cols):
+                rect = QRectF(left + col * cell_w + 0.5, top + row * cell_h + 0.5,
+                              max(1.0, cell_w - 1.0), max(1.0, cell_h - 1.0))
+                slot = cells.get((col, row))
+                if slot is None:
+                    painter.fillRect(rect, QColor(palette["bg"]))
+                    painter.setPen(QColor(palette["outline"]))
+                    painter.drawRect(rect)
+                    continue
+                state = str(slot.get("state") or "untested")
+                painter.fillRect(rect, QColor(_SLOT_COLOR.get(state, _SLOT_COLOR["untested"])))
+                part = str(slot.get("part_id") or "")
+                self._hits.append((rect, f"{part or 'empty'}\nrow {row} col {col}\n{state}"))
+
+    def _sites(self, painter: QPainter, palette: dict[str, str], top: float) -> None:
+        sites = list(self._view.get("sites") or [])
+        painter.setPen(QColor(palette["muted"]))
+        painter.drawText(QRectF(8, top, 36, 26), Qt.AlignVCenter, "site")
+        if not sites:
+            return
+        left = 44.0
+        width = max(1.0, (self.width() - left - 8) / len(sites))
+        for index, site in enumerate(sites):
+            status = str(site.get("status") or "idle")
+            rect = QRectF(left + index * width + 1, top + 2, max(1.0, width - 2), 22)
+            painter.fillRect(rect, QColor(_SITE_COLOR.get(status, _SITE_COLOR["idle"])))
+            painter.setPen(QColor("#ffffff" if status in ("pass", "fail", "testing", "masked") else palette["text"]))
+            painter.drawText(rect, Qt.AlignCenter, f"S{site.get('site')}\n{status}")
+            painter.setPen(QColor(palette["muted"]))
+
+    def _output(self, painter: QPainter, palette: dict[str, str], top: float) -> None:
+        painter.setPen(QColor(palette["muted"]))
+        painter.drawText(QRectF(8, top, 48, 28), Qt.AlignVCenter, "output")
+        pockets = list(self._view.get("output") or [])
         colors = bins_colors()
-        for index, slot in enumerate(sites):
-            site = int(slot.get("site") or 0)
-            info = self._state.get(site, {})
-            col = index % cols
-            row = index // cols
-            rect = QRectF(left + col * cell_w + 2, top + row * cell_h + 2,
-                          cell_w - 4, cell_h - 4)
-            if site in self._masked and site not in self._state:
-                colour = QColor(palette["outline"])
-            else:
-                colour = QColor(colors.get(int(info.get("bin") or 0), "#7f8c8d"))
-            painter.fillRect(rect, colour)
+        left = 58.0
+        if not pockets:
+            painter.drawText(QRectF(left, top, 160, 28), Qt.AlignVCenter, "no sorted parts")
+            return
+        width = max(28.0, min(64.0, (self.width() - left - 8) / len(pockets)))
+        for index, pocket in enumerate(pockets):
+            hard = int(pocket.get("bin") or 0)
+            rect = QRectF(left + index * (width + 4), top + 2, width, 24)
+            painter.fillRect(rect, QColor(colors.get(hard, "#7f8c8d")))
             painter.setPen(QColor("#ffffff"))
-            part = str(slot.get("part_id") or info.get("part_id") or "")
-            painter.drawText(rect, Qt.AlignCenter, f"S{site}\n{part[:10]}")
-            painter.setPen(QColor(palette["text"]))
+            painter.drawText(rect, Qt.AlignCenter, f"H{hard} {pocket.get('count')}")
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+        point = event.position()
+        text = ""
+        for rect, label in self._hits:
+            if rect.contains(point):
+                text = label
+                break
+        if text:
+            QToolTip.showText(event.globalPosition().toPoint(), text, self)
+        else:
+            QToolTip.hideText()
 
 
 class PatternCompareWidget(QWidget):
