@@ -6,14 +6,15 @@ import argparse
 import json
 import multiprocessing
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from .. import __version__
 from ..api.controller import RunHandle, RunOptions
 from ..api.session import ConfigProblem, Session
 
-__all__ = ["main", "build_parser"]
+__all__ = ["build_parser", "main"]
 
 _EXIT_OK = 0
 _EXIT_FAIL = 1
@@ -101,7 +102,7 @@ def cmd_run(args: argparse.Namespace) -> int:
               f"with {options.sites or info.sites} site(s)...", flush=True)
     try:
         summary = handle.run()
-    except Exception as exc:  # noqa: BLE001 - surface any runtime error to the user
+    except Exception as exc:
         print(f"run failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return _EXIT_FAIL
     if args.json:
@@ -133,7 +134,7 @@ def cmd_lot_run(args: argparse.Namespace) -> int:
     except ConfigProblem as exc:
         print(f"configuration error://n{exc}", file=sys.stderr)
         return _EXIT_CONFIG
-    except Exception as exc:  # noqa: BLE001 - surface runtime problems to the user
+    except Exception as exc:
         print(f"lot failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return _EXIT_FAIL
     if args.json:
@@ -158,7 +159,7 @@ def cmd_batch_run(args: argparse.Namespace) -> int:
 
     try:
         spec, jobs = load_batch(args.batch)
-    except Exception as exc:  # noqa: BLE001 - config error
+    except Exception as exc:
         print(f"batch error: {exc}", file=sys.stderr)
         return _EXIT_CONFIG
     if args.workers:
@@ -248,8 +249,10 @@ def cmd_batch_report(args: argparse.Namespace) -> int:
     if caps:
         print("capability:")
         for row in caps[: args.cpk]:
+            "N/A" if row['cpk'] is None else f"{row['cpk']:.3f}"
+            cp = "N/A" if row['cp'] is None else f"{row['cp']:.3f}"
             print(f"  {row['test_num']:6d} {row.get('name', ''):24s} n={row['count']:5d} "
-                  f"cpk={row['cpk']:7.3f} cp={row['cp']:7.3f}")
+                  f"cpk={cp:>7s} cp={cp:>7s}")
     return _EXIT_OK
 
 
@@ -279,7 +282,7 @@ def cmd_pattern_run(args: argparse.Namespace) -> int:
     dut.power(args.vdd)
     timing = TimingSet(name=pattern.timing or "t", period_ns=args.period_ns)
     engine = PatternEngine(dut, levels, timing, max_cycles=args.cycles)
-    result = engine.run(pattern, start_label=args.start, max_cycles=args.cycles,
+    result = engine.run(pattern, completion_mode="window", start_label=args.start, max_cycles=args.cycles,
                         stop_on_first_fail=not args.all_failures)
     if args.json:
         print(json.dumps({
@@ -542,7 +545,7 @@ def _load_plugins() -> Any:
         from ..plugins import get_manager
 
         return get_manager()
-    except Exception:  # noqa: BLE001 - a broken plugin must not break the CLI
+    except Exception:
         import logging
 
         logging.getLogger("pyate.cli").warning("plugin loading failed", exc_info=True)

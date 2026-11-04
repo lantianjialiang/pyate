@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import random
 from dataclasses import dataclass, field
 from typing import Any
 
-from .base import DUTModel, Defect
+from .base import Defect, DUTModel
 
 __all__ = ["YieldSampler", "mix_seed"]
 
@@ -15,8 +16,8 @@ __all__ = ["YieldSampler", "mix_seed"]
 def mix_seed(seed: int, x: float = 0.0, y: float = 0.0) -> int:
     """Deterministic 64-bit mix of a run seed and die coordinates."""
     value = (int(seed) & 0xFFFFFFFFFFFFFFFF) * 1000003
-    value ^= (int(round(x * 1000)) & 0xFFFFFFFF) << 17
-    value ^= (int(round(y * 1000)) & 0xFFFFFFFF) << 3
+    value ^= (round(x * 1000) & 0xFFFFFFFF) << 17
+    value ^= (round(y * 1000) & 0xFFFFFFFF) << 3
     value ^= value >> 29
     return value & 0xFFFFFFFFFFFFFFFF
 
@@ -132,4 +133,6 @@ class YieldSampler:
         target = dut or self.pin_source
         if target is None:
             raise ValueError("YieldSampler needs a DUT instance to bind defects to pins")
-        return self.sample(target, x, y)
+        local = copy.copy(self)
+        local._rng = random.Random(mix_seed(self.seed, x, y))
+        return local.sample(target, x, y)

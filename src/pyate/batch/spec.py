@@ -10,20 +10,21 @@ from __future__ import annotations
 
 import itertools
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
-    "RetestPolicy",
-    "JobSpec",
     "BatchSpec",
     "BatchSpecError",
-    "load_batch",
+    "JobSpec",
+    "RetestPolicy",
     "expand_jobs",
+    "load_batch",
 ]
 
 
@@ -37,9 +38,9 @@ class RetestPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     bins: list[int] = Field(default_factory=list)
-    max_retries: int = 0
-    on: list[str] = Field(default_factory=list)
-    keep: str = "last"
+    max_retries: int = Field(default=0, ge=0)
+    on: list[Literal["fail", "contact_fail"]] = Field(default_factory=list)
+    keep: Literal["last", "best"] = "last"
 
     def bins_for(self, contact_fail: bool = False) -> list[int]:
         """Soft bins that trigger a retest (contact failures are implicit)."""
@@ -200,7 +201,7 @@ def load_batch(path: str | Path) -> tuple[BatchSpec, list[JobSpec]]:
     raw = _normalize_keys(raw)
     try:
         spec = BatchSpec.model_validate(raw)
-    except Exception as exc:  # noqa: BLE001 - pydantic message is descriptive
+    except Exception as exc:
         raise BatchSpecError(f"{file_path}: {exc}") from exc
     spec.path = file_path.resolve()
     if spec.max_workers < 1:

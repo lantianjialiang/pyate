@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from ..base import DUTModel, PinSpec
 from .counter import CounterModel
@@ -103,7 +104,16 @@ class CompositeModel(DUTModel):
     def min_period_ns(self, vdd: float | None = None) -> float:
         """Slowest of both sub-blocks."""
         supply = self._vdd if vdd is None else vdd
-        return max(self._counter.min_period_ns(supply), self._shift.min_period_ns(supply))
+        return max(self._counter.min_period_ns(supply), self._shift.min_period_ns(supply)) * self.slow_derate
+
+    def set_temperature(self, celsius: float) -> None:
+        """Apply one operating corner to both constituent blocks."""
+        super().set_temperature(celsius)
+        for child in (self._counter, self._shift):
+            for key, value in self.params.items():
+                if "tempco" in key or key == "temperature_ref_c":
+                    child.params[key] = value
+            child.set_temperature(celsius)
 
     def apply_process_variation(self, *, vth_shift: float = 0.0, idd_scale: float = 1.0,
                                 leak_scale: float = 1.0) -> None:

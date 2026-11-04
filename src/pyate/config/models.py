@@ -11,13 +11,39 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
-    "VddSpec", "LevelsSet", "LevelsConfig", "EdgeSpec", "TimingSet", "TimingConfig",
-    "TesterConfig", "PinChannel", "ChannelMapConfig", "LoadboardConfig",
-    "Limit", "LimitsConfig", "SoftBin", "HardBin", "BinRule", "BinningConfig",
-    "DefectSpec", "YieldSpec", "ProcessSpec", "DutProfile", "WaferConfig",
-    "LotConfig", "ProberConfig", "HandlerConfig", "StdfOptions", "RunSpec",
-    "OnFail", "BranchSpec", "LoopSpec", "FlowNode", "TestProgram", "SessionSpec",
+    "BinRule",
+    "BinningConfig",
+    "BranchSpec",
+    "ChannelMapConfig",
+    "DefectSpec",
+    "DutProfile",
+    "EdgeSpec",
+    "FlowNode",
+    "HandlerConfig",
+    "HardBin",
+    "LevelsConfig",
+    "LevelsSet",
+    "Limit",
+    "LimitsConfig",
+    "LoadboardConfig",
+    "LoopSpec",
+    "LotConfig",
+    "OnFail",
+    "PinChannel",
+    "ProberConfig",
+    "ProcessSpec",
+    "RunSpec",
+    "SessionSpec",
     "SimulationSpec",
+    "SoftBin",
+    "StdfOptions",
+    "TestProgram",
+    "TesterConfig",
+    "TimingConfig",
+    "TimingSet",
+    "VddSpec",
+    "WaferConfig",
+    "YieldSpec",
 ]
 
 
@@ -34,7 +60,7 @@ class VddSpec(_Strict):
     max: float = 3.6
 
     @model_validator(mode="after")
-    def _order(self) -> "VddSpec":
+    def _order(self) -> VddSpec:
         if not (self.min <= self.nom <= self.max):
             raise ValueError(f"vdd requires min <= nom <= max (got {self.min}/{self.nom}/{self.max})")
         return self
@@ -147,7 +173,7 @@ class PinChannel(_Strict):
     sites: dict[int, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def _expand_bus(self) -> "PinChannel":
+    def _expand_bus(self) -> PinChannel:
         width = self.width
         if "[" in self.pin:
             base, _, spec = self.pin.partition("[")
@@ -169,10 +195,7 @@ class PinChannel(_Strict):
 
     def channel_of(self, site: int, index: int = 0) -> int | None:
         """Physical channel for ``site`` (1-based) and bus ``index``."""
-        if self.sites:
-            base = self.sites.get(site)
-        else:
-            base = self.channel
+        base = self.sites.get(site) if self.sites else self.channel
         return None if base is None else base + index
 
 
@@ -216,6 +239,12 @@ class Limit(_Strict):
         """True when this row applies to ``stage``/``temperature``."""
         stage_ok = self.stage in ("*", "", stage)
         return stage_ok and self.temp_min <= temperature <= self.temp_max
+
+    def physical_bounds(self) -> tuple[float | None, float | None]:
+        """Limits expressed in the same physical unit as raw measurements."""
+        factor = 10.0 ** self.scale
+        return (None if self.lo is None else self.lo * factor,
+                None if self.hi is None else self.hi * factor)
 
 
 class LimitsConfig(_Strict):
@@ -283,7 +312,7 @@ class DefectSpec(_Strict):
 class YieldSpec(_Strict):
     """Statistical yield / defect mix used to sample a DUT population."""
 
-    pass_rate: float = Field(default=0.9, alias="pass")
+    pass_rate: float = Field(default=0.9, alias="pass", ge=0, le=1)
     defect_mix: dict[str, float] = Field(
         default_factory=lambda: {
             "stuck_at": 0.4, "open": 0.2, "short": 0.15,
@@ -291,7 +320,7 @@ class YieldSpec(_Strict):
         }
     )
     edge_fail_boost: float = 1.6
-    cluster_prob: float = 0.02
+    cluster_prob: float = Field(default=0.02, ge=0, le=1)
 
 
 class ProcessSpec(_Strict):
@@ -392,22 +421,22 @@ class OnFail(_Strict):
 
     action: Literal["stop", "continue", "retest"] = "continue"
     bin: int | None = None
-    max_retries: int = 0
+    max_retries: int = Field(default=0, ge=0)
 
 
 class BranchSpec(_Strict):
     """Conditional branch node."""
 
     if_: str = Field(alias="if")
-    then: list["FlowNode"] = Field(default_factory=list)
-    else_: list["FlowNode"] = Field(default_factory=list, alias="else")
+    then: list[FlowNode] = Field(default_factory=list)
+    else_: list[FlowNode] = Field(default_factory=list, alias="else")
 
 
 class LoopSpec(_Strict):
     """Repeat a block ``count`` times."""
 
     count: int = 1
-    items: list["FlowNode"] = Field(default_factory=list)
+    items: list[FlowNode] = Field(default_factory=list)
 
 
 class FlowNode(_Strict):
@@ -419,13 +448,13 @@ class FlowNode(_Strict):
     on_fail: OnFail | None = None
     enabled: bool = True
     group: str | None = None
-    items: list["FlowNode"] = Field(default_factory=list)
+    items: list[FlowNode] = Field(default_factory=list)
     branch: BranchSpec | None = None
     loop: LoopSpec | None = None
     goto_bin: int | None = None
 
     @model_validator(mode="after")
-    def _exactly_one_kind(self) -> "FlowNode":
+    def _exactly_one_kind(self) -> FlowNode:
         kinds = [self.item is not None, self.group is not None, self.branch is not None,
                  self.loop is not None, self.goto_bin is not None]
         if sum(kinds) != 1:
@@ -465,15 +494,19 @@ class RunSpec(_Strict):
     """Per-run knobs (also settable through ``--set``)."""
 
     stage: str = "CP1"
+    backend: str = "simulated"
+    scenario: str | None = None
+    binning_strategy: str | None = None
     sites: int | None = None
     seed: int = 20260101
     temperature: float | None = None
     output_dir: str | None = None
     parallel_mode: Literal["thread", "sequential", "process", "async"] = "thread"
+    ideal_test_ms: float | None = Field(default=None, gt=0, allow_inf_nan=False)
     disabled_sites: list[int] = Field(default_factory=list)
     stop_on_fail: bool = False
     retest_bins: list[int] = Field(default_factory=list)
-    max_retries: int = 0
+    max_retries: int = Field(default=0, ge=0)
     only: list[str] = Field(default_factory=list)
     skip: list[str] = Field(default_factory=list)
 
@@ -483,6 +516,7 @@ class SessionSpec(_Strict):
 
     name: str = "session"
     description: str = ""
+    extensions: dict[str, dict[str, Any]] = Field(default_factory=dict)
     includes: list[str] = Field(default_factory=list)
     program: str = "testprogram.yaml"
     tester: str = "tester.yaml"

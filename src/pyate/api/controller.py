@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from ..datalog.factory import build_sinks
 from ..engine.controller import RunController, RunSummary
 from ..engine.events import EventBus
 from .session import Session
 
-__all__ = ["RunOptions", "RunHandle", "create_run"]
+__all__ = ["RunHandle", "RunOptions", "create_run"]
 
 
 @dataclass
@@ -106,7 +107,7 @@ class RunHandle:
             self.on_finish(self.summary)
         return self.summary
 
-    def start(self) -> "RunHandle":
+    def start(self) -> RunHandle:
         """Start the run in a background thread."""
         if self._thread is not None and self._thread.is_alive():
             raise RuntimeError("run already started")
@@ -118,7 +119,7 @@ class RunHandle:
     def _target(self) -> None:
         try:
             self.run()
-        except BaseException as exc:  # noqa: BLE001 - reported through ``error``
+        except BaseException as exc:
             self.error = exc
         finally:
             self._finished.set()

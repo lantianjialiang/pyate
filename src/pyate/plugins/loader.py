@@ -8,21 +8,22 @@ import logging
 import os
 import sys
 import threading
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any
 
 import pluggy
 
 from .hookspec import API_VERSION, PROJECT_NAME, PyateSpec
 
 __all__ = [
-    "HookPolicy",
-    "PluginRegistry",
-    "PluginManager",
     "HookBridge",
+    "HookPolicy",
+    "PluginManager",
+    "PluginRegistry",
     "get_manager",
     "load_plugins",
     "reset_manager",
@@ -41,6 +42,10 @@ class HookPolicy(str, Enum):
     IGNORE = "ignore"
     WARN = "warn"
     ABORT = "abort"
+
+
+class PluginAbort(RuntimeError):
+    """A plugin explicitly requested termination under the ABORT policy."""
 
 
 @dataclass
@@ -123,7 +128,7 @@ class PluginRegistry:
 class HookBridge:
     """Object handed to the engine as ``hooks=``; dispatches to pluggy."""
 
-    def __init__(self, manager: "PluginManager") -> None:
+    def __init__(self, manager: PluginManager) -> None:
         self._manager = manager
 
     def before_lot(self, **kwargs: Any) -> None:
@@ -178,7 +183,7 @@ class PluginManager:
         names: list[str] = []
         try:
             self.pm.load_setuptools_entrypoints(PROJECT_NAME)
-        except Exception as exc:  # noqa: BLE001 - never break on a broken dist
+        except Exception as exc:
             self.errors.append(f"entry point scan failed: {exc}")
             return names
         for plugin in self.pm.get_plugins():
@@ -200,14 +205,14 @@ class PluginManager:
         if isinstance(candidate, type):
             try:
                 target = candidate()
-            except Exception as exc:  # noqa: BLE001 - isolate broken constructors
+            except Exception as exc:
                 self.errors.append(f"{name}: Plugin() failed: {type(exc).__name__}: {exc}")
                 return False
         try:
             self.pm.register(target, name=name)
         except ValueError:
             return False  # already registered
-        except Exception as exc:  # noqa: BLE001 - pluggy rejects malformed plugins
+        except Exception as exc:
             self.errors.append(f"{name}: register failed: {type(exc).__name__}: {exc}")
             return False
         self._warn_missing_markers(name, target)
@@ -243,7 +248,7 @@ class PluginManager:
                 module = self._import_from(file_path, file_path.stem)
             else:
                 return False
-        except Exception as exc:  # noqa: BLE001 - isolate import failures
+        except Exception as exc:
             self.errors.append(f"{file_path}: {type(exc).__name__}: {exc}")
             return False
         if module is None:
@@ -275,12 +280,11 @@ class PluginManager:
             if entry.is_file() and entry.suffix == ".py":
                 if self.load_file(entry):
                     found.append(entry.stem)
-            elif entry.is_dir() and (entry / "__init__.py").is_file():
-                if self.load_file(entry):
-                    found.append(entry.name)
+            elif entry.is_dir() and (entry / "__init__.py").is_file() and self.load_file(entry):
+                found.append(entry.name)
         return found
 
-    def load_all(self, directories: Sequence[str | Path] | None = None) -> "PluginManager":
+    def load_all(self, directories: Sequence[str | Path] | None = None) -> PluginManager:
         """Entry points first, then explicit directories, then the default ones."""
         with self._lock:
             self.load_entrypoints()
@@ -302,7 +306,7 @@ class PluginManager:
                 hooks = self.pm.hook.pyate_api_version
                 results = [v for v in hooks() if v]
                 version = results[0] if results else None
-            except Exception as exc:  # noqa: BLE001 - a broken hook must not abort
+            except Exception as exc:
                 self.errors.append(f"{name}: api_version hook failed: {exc}")
                 continue
             if version is not None and not _compatible(str(version), self.api_version):
@@ -314,7 +318,7 @@ class PluginManager:
     def _register(self) -> None:
         try:
             self.pm.hook.pyate_register(registry=self.registry)
-        except Exception as exc:  # noqa: BLE001 - registration failures are reported
+        except Exception as exc:
             self.errors.append(f"pyate_register failed: {type(exc).__name__}: {exc}")
 
     def _name_of(self, plugin: Any) -> str:
@@ -330,16 +334,20 @@ class PluginManager:
         dispatcher = getattr(self.pm.hook, hook, None)
         if dispatcher is None:  # pragma: no cover - unknown hook name
             return []
-        try:
-            return list(dispatcher(**kwargs))
-        except Exception as exc:  # noqa: BLE001 - plugin code is untrusted
-            message = f"plugin hook '{hook}' failed: {type(exc).__name__}: {exc}"
-            if self.policy is HookPolicy.ABORT:
-                raise
-            if self.policy is HookPolicy.WARN:
-                _LOG.warning(message)
-                self.errors.append(message)
-            return []
+        output = []
+        plugins = list(self.pm.get_plugins())
+        for plugin in sorted(plugins, key=self._name_of):
+            caller = self.pm.subset_hook_caller(hook, remove_plugins=[p for p in plugins if p is not plugin])
+            try:
+                output.extend(caller(**kwargs))
+            except Exception as exc:
+                message = f"plugin hook '{hook}' failed: {type(exc).__name__}: {exc}"
+                if self.policy is HookPolicy.ABORT:
+                    raise PluginAbort(message) from exc
+                if self.policy is HookPolicy.WARN:
+                    _LOG.warning(message)
+                    self.errors.append(message)
+        return output
 
     # ------------------------------------------------------------------ info
     def info(self) -> dict[str, Any]:

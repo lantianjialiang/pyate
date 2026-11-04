@@ -14,7 +14,6 @@ import io
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -221,7 +220,7 @@ class FileEditor(QWidget):
                 self._data = {"limits": _parse_csv(raw)}
             else:
                 self._data = yaml.safe_load(raw) or {}
-        except Exception as exc:  # noqa: BLE001 - keep the previous form
+        except Exception as exc:
             self.status.setText(f"text: {exc}")
             return
         self.status.setText("")

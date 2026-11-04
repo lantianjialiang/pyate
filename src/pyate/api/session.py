@@ -45,7 +45,7 @@ from ..config.validators import (
     validate_session,
 )
 
-__all__ = ["Session", "SessionInfo", "ConfigProblem", "FileDocument", "SaveResult"]
+__all__ = ["ConfigProblem", "FileDocument", "SaveResult", "Session", "SessionInfo"]
 
 _LIMIT_COLUMNS = [
     "test_num", "name", "lo", "hi", "unit", "scale", "stage", "temp_min", "temp_max",
@@ -388,7 +388,7 @@ class Session:
                 data: Any = {"limits": _parse_limits_csv(text)}
             else:
                 data = yaml.safe_load(text) or {}
-        except Exception as exc:  # noqa: BLE001 - shown in the editor
+        except Exception as exc:
             return SaveResult(False, f"{key}: {exc}")
         return self.save_file_data(key, data)
 
@@ -398,7 +398,7 @@ class Session:
         attr, model = self._model_of(key)
         try:
             obj = model.model_validate(data)
-        except Exception as exc:  # noqa: BLE001 - pydantic.ValidationError
+        except Exception as exc:
             return SaveResult(False, f"{key}: {exc}")
         if key in ("session", "run"):
             return self._save_session_spec(loaded, key, obj)
@@ -491,10 +491,7 @@ class Session:
         return Path(raw)
 
     def _save_session_spec(self, loaded: LoadedSession, key: str, obj: Any) -> SaveResult:
-        if key == "run":
-            spec = loaded.spec.model_copy(update={"run": obj})
-        else:
-            spec = obj
+        spec = loaded.spec.model_copy(update={"run": obj}) if key == "run" else obj
         path = loaded.path
         tmp = path.with_name(path.name + ".pyate-tmp")
         _replace_text(tmp, _dump_yaml(spec.model_dump(mode="json", by_alias=True)))

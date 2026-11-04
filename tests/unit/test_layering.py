@@ -108,9 +108,8 @@ def test_cli_only_imports_the_gui_lazily() -> None:
             target = node.module or ""
         elif isinstance(node, ast.Import):
             target = ",".join(alias.name for alias in node.names)
-        if target and "gui" in target and "pyate" in target:
-            if id(node) in module_level:
-                offenders.append(f"line {node.lineno}: {target}")
+        if target and "gui" in target and "pyate" in target and id(node) in module_level:
+            offenders.append(f"line {node.lineno}: {target}")
     assert offenders == [], offenders
 
 

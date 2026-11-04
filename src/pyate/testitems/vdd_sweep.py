@@ -5,21 +5,26 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from pydantic import Field
+
 from ..config.models import TimingSet
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend, HALError
 from ..pattern.model import Pattern
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["VddMinParams", "VddMinSearchItem", "FmaxParams", "FmaxSearchItem"]
+__all__ = ["FmaxParams", "FmaxSearchItem", "VddMinParams", "VddMinSearchItem"]
 
 
 def _load_pattern(ctx: SiteContext, name: str) -> Pattern:
     loader = ctx.extra.get("pattern_loader")
     if loader is None:
         raise HALError("search item requires a pattern loader", site=ctx.site_id)
-    return loader(name)
+    value = loader(name)
+    if not isinstance(value, Pattern):
+        raise TypeError("pattern loader must return Pattern")
+    return value
 
 
 def _set_supply(hal: HALBackend, ctx: SiteContext, volts: float) -> None:
@@ -42,7 +47,7 @@ def _set_period(channel: Any, period_ns: float) -> TimingSet:
 
 def _run(channel: Any, pattern: Pattern, cycles: int) -> bool:
     channel.load_pattern(pattern)
-    return bool(channel.run(stop_on_first_fail=True, max_cycles=cycles).passed)
+    return bool(channel.run(stop_on_first_fail=True, max_cycles=cycles, completion_mode="window").passed)
 
 
 class VddMinParams(TestItemParams):
@@ -51,8 +56,8 @@ class VddMinParams(TestItemParams):
     pattern: str = "cnt_loop.pat"
     vdd_start: float = 3.6
     vdd_stop: float = 2.0
-    resolution: float = 0.01
-    cycles: int = 256
+    resolution: float = Field(default=0.01, ge=0.000001)
+    cycles: int = Field(default=256, gt=0)
     restore_vdd: float | None = None
     lo: float | None = None
     hi: float | None = None
@@ -106,8 +111,8 @@ class FmaxParams(TestItemParams):
     pattern: str = "cnt_loop.pat"
     period_min_ns: float = 2.0
     period_max_ns: float = 200.0
-    resolution_ns: float = 0.5
-    cycles: int = 256
+    resolution_ns: float = Field(default=0.5, ge=0.000001)
+    cycles: int = Field(default=256, gt=0)
     restore_period_ns: float | None = None
     lo: float | None = None
     hi: float | None = None

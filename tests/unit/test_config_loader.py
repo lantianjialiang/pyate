@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from conftest import CP_SESSION, FT_SESSION, small_cp_overrides
 from pyate.config import ConfigError, load_session, read_config, validate_session
 from pyate.config.loader import deep_merge, split_overrides
 from pyate.config.models import (
@@ -13,15 +14,13 @@ from pyate.config.models import (
     ChannelMapConfig,
     DutProfile,
     FlowNode,
+    LevelsConfig,
     Limit,
     LimitsConfig,
-    LevelsConfig,
     SessionSpec,
     TimingConfig,
 )
 from pyate.config.models import TestProgram as ProgramModel
-
-from conftest import CONFIGS, CP_SESSION, FT_SESSION, small_cp_overrides
 
 
 # --------------------------------------------------------------------- models

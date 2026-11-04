@@ -20,7 +20,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pyate.pattern.generators import (  # noqa: E402
+from pyate.pattern.generators import (
     composite_pattern,
     counter_loop_pattern,
     shift_pattern,
@@ -204,6 +204,8 @@ def cp_program() -> dict[str, Any]:
             "CP2": [
                 {"item": "continuity", "test_num": 1000,
                  "params": {"fail_code": 2}, "on_fail": {"action": "stop", "bin": 2}},
+                {"item": "idd_static", "test_num": 2000,
+                 "params": {"fail_code": 4}, "on_fail": {"action": "continue"}},
                 {"item": "leakage_ih_il", "test_num": 1100,
                  "params": {"fail_code": 3}, "on_fail": {"action": "continue"}},
                 {"item": "functional", "test_num": 3000,

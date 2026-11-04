@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from pyate.api.pattern import available_models, default_profile, run_pattern
-
 from conftest import CONFIGS
+from pyate.api.pattern import available_models, default_profile, run_pattern
 
 PATTERN = CONFIGS / "demo_cp" / "patterns" / "cnt_basic.pat"
 

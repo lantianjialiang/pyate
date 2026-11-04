@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
-from ..base import DUTModel, DUTError, PinSpec
+from ..base import DUTError, DUTModel, PinSpec
 
 __all__ = ["SramModel"]
 

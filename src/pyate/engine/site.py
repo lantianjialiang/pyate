@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
 
+from ..plugins.loader import PluginAbort
 from .context import PartResult, RunContext, SiteContext
 from .events import EventBus, EventKind
 from .executor import FlowExecutor
@@ -31,6 +32,7 @@ class SiteBarrier:
         self._waiting = 0
         self._generation = 0
         self._aborted = False
+        self._timed_out = False
         self._cond = threading.Condition()
 
     @property
@@ -41,6 +43,8 @@ class SiteBarrier:
     def wait(self, timeout: float = 120.0) -> None:
         """Block until every active site arrives (or the barrier is aborted)."""
         with self._cond:
+            if self._timed_out:
+                raise TimeoutError("site synchronization timed out")
             if self._aborted or self._parties <= 1:
                 return
             generation = self._generation
@@ -52,11 +56,14 @@ class SiteBarrier:
                 return
             while generation == self._generation and not self._aborted:
                 if not self._cond.wait(timeout):
-                    # timeout: treat as release to avoid a hung tester
+                    self._timed_out = True
+                    self._aborted = True
                     self._generation += 1
                     self._waiting = 0
                     self._cond.notify_all()
-                    return
+                    raise TimeoutError("site synchronization timed out")
+            if self._timed_out:
+                raise TimeoutError("site synchronization timed out")
 
     def leave(self) -> None:
         """Remove one site from the barrier (called on fail-stop/finish)."""
@@ -123,11 +130,24 @@ class SiteScheduler:
     ) -> None:
         if mode not in _MODES:
             raise ValueError(f"unknown parallel mode {mode!r}, expected one of {sorted(_MODES)}")
+        if mode == "process":
+            raise ValueError("site parallel_mode=process is not implemented; use thread or sequential")
+        if max_workers is not None and max_workers < 1:
+            raise ValueError("max_workers must be positive")
         self.executor_factory = executor_factory
         self.mode = mode
         self.max_workers = max_workers
         self.events = events or EventBus()
         self.sync_items = sync_items
+        self._pool: ThreadPoolExecutor | None = None
+        self._pool_workers = 0
+
+    def close(self) -> None:
+        """Join the reusable site workers after the last touchdown."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._pool = None
+            self._pool_workers = 0
 
     def run_touchdown(self, contexts: Sequence[SiteContext],
                       run_ctx: RunContext | None = None) -> list[PartResult]:
@@ -142,19 +162,25 @@ class SiteScheduler:
                 executor = self.executor_factory(None)
                 results.append(self._run_one(executor, ctx, run_ctx))
         else:
-            if self.mode == "process":
-                _LOG.warning("parallel_mode=process falls back to threads in this build")
             barrier: SiteBarrier | None = None
-            if self.sync_items and self.mode in ("thread", "process"):
+            if self.sync_items and self.mode == "thread":
                 barrier = SiteBarrier(len(active))
             workers = self.max_workers or len(active)
-            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pyate-site") as pool:
+            if barrier is not None and workers < len(active):
+                raise ValueError("synchronized sites require at least one worker per active site")
+            if self._pool is None or workers > self._pool_workers:
+                self.close()
+                self._pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pyate-site")
+                self._pool_workers = workers
+            pool = self._pool
+            try:
                 futures = []
                 for ctx in active:
                     executor = self.executor_factory(barrier)
                     futures.append(pool.submit(self._run_one, executor, ctx, run_ctx))
                 for future in futures:
                     results.append(future.result())
+            finally:
                 if barrier is not None:
                     barrier.abort()
         results.extend(self._skipped_part(ctx) for ctx in skipped)
@@ -165,7 +191,9 @@ class SiteScheduler:
                  run_ctx: RunContext | None) -> PartResult:
         try:
             return executor.run_part(ctx, run_ctx)
-        except Exception as exc:  # noqa: BLE001 - isolate a broken site
+        except PluginAbort:
+            raise
+        except Exception as exc:
             _LOG.exception("site %s crashed", ctx.site_id)
             self.events.publish(EventKind.ERROR, {"site": ctx.site_id, "error": repr(exc)})
             return PartResult(
@@ -174,6 +202,8 @@ class SiteScheduler:
                 test_time_ms=0.0, results=list(ctx.results),
                 extra={"error": repr(exc)},
             )
+        finally:
+            executor._leave_barrier()
 
     @staticmethod
     def _skipped_part(ctx: SiteContext) -> PartResult:

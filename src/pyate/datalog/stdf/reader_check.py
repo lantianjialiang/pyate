@@ -9,7 +9,7 @@ from typing import Any
 
 from .records import decode_record
 
-__all__ = ["VerifyReport", "read_stdf", "verify_stdf", "pystdf_summary"]
+__all__ = ["VerifyReport", "pystdf_summary", "read_stdf", "verify_stdf"]
 
 
 @dataclass
@@ -63,7 +63,8 @@ def _open_binary(path: Path) -> Any:
 def read_stdf(path: str | Path) -> list[tuple[str, dict[str, Any]]]:
     """Read every record of a (optionally gzipped) STDF file."""
     file_path = Path(path)
-    data = _open_binary(file_path).read()
+    with _open_binary(file_path) as handle:
+        data = handle.read()
     records: list[tuple[str, dict[str, Any]]] = []
     offset = 0
     while offset + 4 <= len(data):
@@ -83,7 +84,7 @@ def verify_stdf(path: str | Path, *, use_pystdf: bool = True) -> VerifyReport:
         return report
     try:
         records = read_stdf(file_path)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         report.errors.append(f"cannot decode: {exc}")
         return report
 
@@ -137,7 +138,7 @@ def verify_stdf(path: str | Path, *, use_pystdf: bool = True) -> VerifyReport:
                         f"PRR site {site}: NUM_TEST={num_test} but {written} test record(s) written"
                     )
             report.parts += 1
-            if int(values.get("PART_FLG") or 0) & 0x04:
+            if int(values.get("PART_FLG") or 0) & 0x03:
                 report.retest_parts += 1
             hbin = int(values.get("HARD_BIN") or 0)
             sbin = int(values.get("SOFT_BIN") or 0)
@@ -210,6 +211,6 @@ def pystdf_summary(path: str | Path) -> dict[str, Any]:
             parser = Parser(inp=handle)
             parser.addSink(sink)
             parser.parse()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
     return {"ok": True, "counts": sink.counts, "parts": sink.counts.get("Prr")}

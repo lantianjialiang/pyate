@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
+from typing import Any
 
 from ..config.models import WaferConfig
 from .base import UnitPlan
@@ -17,7 +18,7 @@ class CpScenario:
 
     name = "CP"
 
-    def __init__(self, session: object, sites: int, *, wafers: list[str] | None = None,
+    def __init__(self, session: Any, sites: int, *, wafers: list[str] | None = None,
                  die_filter: set[tuple[str, int, int]] | None = None,
                  seed: int | None = None) -> None:
         self.session = session
@@ -36,6 +37,7 @@ class CpScenario:
 
     def units(self) -> Iterator[UnitPlan]:
         """Yield one unit per wafer."""
+        assert self.prober is not None
         for index, wafer_id in enumerate(self.wafers):
             wafer = WaferMap(self.wafer_config, wafer_id)
             prober = ProberSimulator(
@@ -50,6 +52,7 @@ class CpScenario:
                 change_time_ms=float(self.prober.wafer_change_time_s) * 1000.0,
                 meta={
                     "wafer_map": wafer,
+                    "touchdown_count": prober.touchdown_count(),
                     "die_filter": self.die_filter,
                     "index_time_ms": float(self.prober.index_time_ms),
                 },

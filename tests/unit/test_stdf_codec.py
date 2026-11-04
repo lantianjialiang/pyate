@@ -16,9 +16,9 @@ from pyate.datalog.stdf.records import (
     PIR,
     PRR,
     PTR,
+    RECORDS,
     SBR,
     SDR,
-    RECORDS,
     RecordSpec,
     decode_record,
     encode_dn,
@@ -45,11 +45,11 @@ def test_split_k_reports_counter_index_and_element_type() -> None:
 
 
 def test_encode_dn_packs_bit_positions_lsb_first() -> None:
-    assert encode_dn([], 8) == b"\x00"
+    assert encode_dn([], 8) == b"\x08\x00\x00"
     encoded = encode_dn([0, 9], 16)
-    assert encoded[0] == 16  # bit count
-    assert encoded[1] == 0b0000_0001
-    assert encoded[2] == 0b0000_0010
+    assert encoded[:2] == b"\x10\x00"  # U2 bit count
+    assert encoded[2] == 0b0000_0001
+    assert encoded[3] == 0b0000_0010
 
 
 def test_far_roundtrip_carries_version() -> None:

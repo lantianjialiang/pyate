@@ -90,7 +90,7 @@ def run_pattern(
     )
     timing = TimingSet(name=pattern.timing or "t", period_ns=period_ns)
     engine = PatternEngine(dut, levels, timing, max_cycles=max_cycles)
-    result = engine.run(pattern, start_label=start_label, max_cycles=max_cycles,
+    result = engine.run(pattern, completion_mode="window", start_label=start_label, max_cycles=max_cycles,
                         stop_on_first_fail=stop_on_first_fail)
     return PatternRunReport(
         path=str(path),

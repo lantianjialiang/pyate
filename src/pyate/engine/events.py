@@ -10,13 +10,14 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 _LOG = logging.getLogger("pyate.events")
 
-__all__ = ["EventKind", "Event", "EventBus"]
+__all__ = ["Event", "EventBus", "EventKind"]
 
 
 class EventKind(str, Enum):
@@ -128,7 +129,7 @@ class EventBus:
         for callback in callbacks:
             try:
                 callback(event)
-            except Exception as exc:  # noqa: BLE001 - listener isolation is the point
+            except Exception as exc:
                 self._error_count += 1
                 try:
                     self.on_error(event, exc)

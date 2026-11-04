@@ -9,19 +9,23 @@ from __future__ import annotations
 import random
 import threading
 import time
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from ..config.models import ChannelMapConfig, LevelsConfig, LevelsSet, TimingConfig, TimingSet
 from ..dut.base import DUTModel
-from .base import HALError, HALBackend, NotConnected, OverCurrent, ResourceConflict, SiteResources
+from .base import HALBackend, HALError, NotConnected, OverCurrent, ResourceConflict, SiteResources
 from .digital import DigitalChannel
 from .dps import DPS
 from .pmu import PMU
 from .relay import Relay
 
 __all__ = [
-    "SimulatedDPS", "SimulatedPMU", "SimulatedRelay", "SimulatedDigitalChannel",
+    "SimulatedDPS",
+    "SimulatedDigitalChannel",
     "SimulatedHAL",
+    "SimulatedPMU",
+    "SimulatedRelay",
 ]
 
 _POWER_PINS = ("VDD", "VCC", "VDDIO", "VDD_CORE", "AVDD")
@@ -30,7 +34,7 @@ _POWER_PINS = ("VDD", "VCC", "VDDIO", "VDD_CORE", "AVDD")
 class _Instrument:
     """Common plumbing: DUT access, noise, simulated time accounting."""
 
-    def __init__(self, hal: "SimulatedHAL", site_id: int) -> None:
+    def __init__(self, hal: SimulatedHAL, site_id: int) -> None:
         self.hal = hal
         self.site_id = site_id
 
@@ -50,7 +54,7 @@ class _Instrument:
 class SimulatedDPS(_Instrument, DPS):
     """Voltage source with current measurement and compliance."""
 
-    def __init__(self, hal: "SimulatedHAL", site_id: int,
+    def __init__(self, hal: SimulatedHAL, site_id: int,
                  limits: Mapping[str, float] | None = None) -> None:
         super().__init__(hal, site_id)
         self._voltage: dict[str, float] = {}
@@ -127,7 +131,7 @@ class SimulatedDPS(_Instrument, DPS):
 class SimulatedPMU(_Instrument, PMU):
     """FVMI / FIMV parametric unit routed through the relay matrix."""
 
-    def __init__(self, hal: "SimulatedHAL", site_id: int, relay: SimulatedRelay) -> None:
+    def __init__(self, hal: SimulatedHAL, site_id: int, relay: SimulatedRelay) -> None:
         super().__init__(hal, site_id)
         self._relay = relay
         self._mode: dict[str, str] = {}
@@ -199,7 +203,7 @@ class SimulatedPMU(_Instrument, PMU):
 class SimulatedRelay(Relay):
     """Named relay matrix with open/close bookkeeping."""
 
-    def __init__(self, hal: "SimulatedHAL", site_id: int) -> None:
+    def __init__(self, hal: SimulatedHAL, site_id: int) -> None:
         self.hal = hal
         self.site_id = site_id
         self._state: dict[str, bool] = {}
@@ -227,7 +231,7 @@ class SimulatedRelay(Relay):
 class SimulatedDigitalChannel(_Instrument, DigitalChannel):
     """Pin electronics: level/timing sets plus pattern execution."""
 
-    def __init__(self, hal: "SimulatedHAL", site_id: int, *,
+    def __init__(self, hal: SimulatedHAL, site_id: int, *,
                  levels: LevelsSet, timing: TimingSet,
                  timing_map: dict[str, TimingSet] | None = None) -> None:
         super().__init__(hal, site_id)
@@ -235,7 +239,7 @@ class SimulatedDigitalChannel(_Instrument, DigitalChannel):
         self.levels = levels
         self.timing = timing
         self.timing_map: dict[str, TimingSet] = dict(timing_map or {})
-        self.pattern = None
+        self.pattern: Any = None
         self.engine = None
 
     def apply_levels(self, levels: LevelsSet) -> None:
@@ -248,7 +252,7 @@ class SimulatedDigitalChannel(_Instrument, DigitalChannel):
         """Force every referenced timing set to ``timing`` (fmax/shmoo search)."""
         self.timing = timing
         if self.timing_map:
-            self.timing_map = {name: timing for name in self.timing_map}
+            self.timing_map = dict.fromkeys(self.timing_map, timing)
         else:
             self.timing_map = {timing.name: timing}
 
@@ -266,7 +270,7 @@ class SimulatedDigitalChannel(_Instrument, DigitalChannel):
 
     def run(self, *, start_label: str | None = None, stop_on_first_fail: bool = True,
             max_cycles: int | None = None, capture_start: int | None = None,
-            capture_stop: int | None = None) -> Any:
+            capture_stop: int | None = None, completion_mode: str = "complete") -> Any:
         from ..pattern.engine import PatternEngine
 
         if self.dut is None:
@@ -281,6 +285,7 @@ class SimulatedDigitalChannel(_Instrument, DigitalChannel):
             rng=self.hal.rng_for(self.site_id),
             noise_sigma=self.hal.noise_sigma,
             max_fail_log=self.hal.max_fail_log,
+            cancel_check=getattr(self.hal, "cancel_check", None),
         )
         result = engine.run(
             self.pattern,
@@ -289,6 +294,7 @@ class SimulatedDigitalChannel(_Instrument, DigitalChannel):
             max_cycles=max_cycles,
             capture_start=capture_start,
             capture_stop=capture_stop,
+            completion_mode=completion_mode,
         )
         self.hal.add_time(self.site_id, result.elapsed_ms)
         return result
@@ -336,7 +342,9 @@ class SimulatedHAL(HALBackend):
                 channel = entry.channel_of(site, bit)
                 if channel is not None:
                     pin_map[pin] = channel
-            duplicates = len(set(pin_map.values())) != len(pin_map)
+            resources = [("DPS" if expanded[pin][0].type == "power" else "digital", channel)
+                         for pin, channel in pin_map.items()]
+            duplicates = len(set(resources)) != len(resources)
             if duplicates:
                 raise ResourceConflict(f"duplicate channel assignment on site {site}", site=site)
             self._pin_maps[site] = pin_map
@@ -369,7 +377,9 @@ class SimulatedHAL(HALBackend):
     def bind_dut(self, site_id: int, dut: DUTModel) -> None:
         resources = self.site(site_id)
         self._duts[site_id] = dut
-        resources.digital.dut = dut  # type: ignore[attr-defined]
+        if dut.noise_seed is not None:
+            self._rngs[site_id] = random.Random(dut.noise_seed)
+        resources.digital.dut = dut
         dut.power(0.0)
 
     def dut(self, site_id: int) -> DUTModel | None:
@@ -386,7 +396,7 @@ class SimulatedHAL(HALBackend):
 
     def apply_noise(self, site_id: int, value: float, sigma: float | None = None) -> float:
         """Add relative Gaussian noise; ``sigma`` defaults to the configured value."""
-        rel = self.noise_sigma if sigma is None else sigma
+        rel = self.noise_sigma if sigma is None else sigma * self.noise_sigma / 0.002
         if rel <= 0:
             return float(value)
         return float(value * (1.0 + self._rngs[site_id].gauss(0.0, rel)))
@@ -394,10 +404,19 @@ class SimulatedHAL(HALBackend):
     # ------------------------------------------------------------------ time
     def add_time(self, site_id: int, milliseconds: float) -> None:
         """Accumulate simulated time (optionally really sleeping)."""
+        check = getattr(self, "cancel_check", None)
+        if check is not None:
+            check()
         with self._lock:
             self._time_ms[site_id] = self._time_ms.get(site_id, 0.0) + max(0.0, milliseconds)
         if self.sim_time_scale > 0 and milliseconds > 0:
-            time.sleep(milliseconds * self.sim_time_scale / 1000.0)
+            remaining = milliseconds * self.sim_time_scale / 1000.0
+            while remaining > 0:
+                if check is not None:
+                    check()
+                step = min(.05, remaining)
+                time.sleep(step)
+                remaining -= step
 
     def elapsed_ms(self, site_id: int) -> float:
         return self._time_ms.get(site_id, 0.0)
@@ -438,7 +457,7 @@ class SimulatedHAL(HALBackend):
         }
 
     @classmethod
-    def from_session(cls, session: Any, *, site_count: int | None = None) -> "SimulatedHAL":
+    def from_session(cls, session: Any, *, site_count: int | None = None) -> SimulatedHAL:
         """Build a HAL from a loaded session."""
         return cls(
             site_count=site_count or session.site_count(),

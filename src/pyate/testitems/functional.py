@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend, HALError
 from ..pattern.model import Pattern
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["FunctionalParams", "FunctionalItem"]
+__all__ = ["FunctionalItem", "FunctionalParams"]
 
 
 class FunctionalParams(TestItemParams):
@@ -17,6 +19,7 @@ class FunctionalParams(TestItemParams):
     pattern: str
     start_label: str | None = None
     max_cycles: int | None = None
+    completion_mode: Literal["complete", "window"] = "complete"
     stop_on_first_fail: bool = True
     fail_code: int = 6
 
@@ -36,7 +39,7 @@ class FunctionalItem(TestItem):
                            site=ctx.site_id)
         try:
             pattern: Pattern = loader(self.params.pattern)
-        except Exception as exc:  # noqa: BLE001 - surface as a test failure
+        except Exception as exc:
             result = self.make_result(ctx, name=f"functional_{self.params.pattern}",
                                       value=None, kind="FTR")
             result.fail(self.params.fail_code)
@@ -55,6 +58,7 @@ class FunctionalItem(TestItem):
             start_label=self.params.start_label,
             stop_on_first_fail=self.params.stop_on_first_fail,
             max_cycles=self.params.max_cycles,
+            completion_mode=self.params.completion_mode,
         )
         first = run.fail_log[0] if run.fail_log else None
         result = self.make_result(
@@ -71,6 +75,8 @@ class FunctionalItem(TestItem):
             pattern=pattern.name,
         )
         result.passed = run.passed
+        result.functional_passed = run.passed
+        result.execution_status = "incomplete" if run.status == "incomplete" else "completed"
         result.test_time_ms = run.elapsed_ms
         if not run.passed:
             result.fail_code = self.params.fail_code
@@ -78,5 +84,5 @@ class FunctionalItem(TestItem):
                 result.extra["first_fail_cycle"] = first.cycle
                 result.extra["first_fail_line"] = first.line
                 result.extra["expected"] = first.expected
-                result.extra["actual"] = {k: v for k, v in first.actual.items()}
+                result.extra["actual"] = dict(first.actual.items())
         return [result]

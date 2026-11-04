@@ -1,0 +1,33 @@
+name: Quality
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  windows-py312:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-dev-py312.txt
+      - name: Install validated dependencies
+        run: |
+          python -m pip install -r requirements-dev-py312.txt
+          python -m pip install --no-deps -e .
+      - name: Lint
+        run: python -m ruff check src tests tools
+      - name: Strict core types
+        run: python -m mypy --strict src/pyate/config src/pyate/hal src/pyate/dut src/pyate/pattern src/pyate/engine src/pyate/datalog
+      - name: Full suite including Qt
+        run: python -m pytest tests --junitxml=out/junit.xml --cov=pyate --cov-report=xml:out/coverage.xml --cov-report=json:out/coverage.json --cov-report=term
+      - name: Save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-py312-windows
+          path: out/

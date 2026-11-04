@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import DUTError, DUTModel, Defect, PinSpec
+from .base import Defect, DUTError, DUTModel, PinSpec
 from .registry import (
     YieldSampler,
     create_dut,

@@ -10,7 +10,7 @@ import multiprocessing
 
 multiprocessing.freeze_support()
 
-from pyate.cli.main import main  # noqa: E402
+from pyate.cli.main import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

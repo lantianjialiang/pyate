@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Protocol
+from typing import Any, Protocol
 
 from ..engine.context import TouchdownInfo
 
-__all__ = ["UnitPlan", "Scenario"]
+__all__ = ["Scenario", "UnitPlan"]
 
 
 @dataclass

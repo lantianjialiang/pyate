@@ -11,10 +11,13 @@ from __future__ import annotations
 import math
 import random
 from abc import ABC, abstractmethod
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Any, ClassVar, Iterable, Mapping
+from typing import Any, ClassVar
 
-__all__ = ["DUTError", "PinSpec", "Defect", "DUTModel"]
+from .identity import DUTInstanceSpec
+
+__all__ = ["DUTError", "DUTModel", "Defect", "PinSpec"]
 
 
 class DUTError(Exception):
@@ -87,11 +90,21 @@ class DUTModel(ABC):
         "diode_v": 0.68,
         "base_period_ns": 12.0,
         "vth_v": 2.0,
+        "temperature_ref_c": 25.0,
+        "idd_tempco_per_c": 0.002,
+        "leak_tempco_per_c": math.log(2.0) / 20.0,
+        "period_tempco_per_c": 0.001,
+        "vmin_tempco_v_per_c": 0.0005,
+        "diode_tempco_v_per_c": -0.002,
+        "output_delay_fraction": 0.2,
     }
 
     def __init__(self, params: Mapping[str, Any] | None = None,
                  rng: random.Random | None = None) -> None:
         self.params: dict[str, Any] = dict(self.defaults)
+        self.instance_spec: DUTInstanceSpec | None = None
+        self.noise_seed: int | None = None
+        self.temperature_c = float(self.defaults["temperature_ref_c"])
         self.params.update(dict(params or {}))
         self.rng = rng or random.Random(0)
         self.pins: dict[str, PinSpec] = self._build_pins()
@@ -186,7 +199,23 @@ class DUTModel(ABC):
     @property
     def vdd_min_effective(self) -> float:
         """Minimum working voltage including process shift."""
-        return self.vdd_min + self.vth_shift
+        return self.vdd_min + self.vth_shift + float(self.params["vmin_tempco_v_per_c"]) * self.temperature_delta
+
+    @property
+    def temperature_delta(self) -> float:
+        """Difference from the model's characterized reference temperature."""
+        return self.temperature_c - float(self.params["temperature_ref_c"])
+
+    def set_temperature(self, celsius: float) -> None:
+        """Set the operating corner without resampling manufacturing variation."""
+        if not math.isfinite(celsius) or celsius < -273.15:
+            raise DUTError("temperature must be finite and above absolute zero")
+        self.temperature_c = float(celsius)
+
+    def _thermal_scale(self, coefficient: str) -> float:
+        # Bound the exponential so malformed/extreme corners cannot overflow.
+        exponent = float(self.params[coefficient]) * self.temperature_delta
+        return math.exp(max(-50.0, min(50.0, exponent)))
 
     def is_functional(self) -> bool:
         """True when the supply is inside the functional window."""
@@ -228,7 +257,7 @@ class DUTModel(ABC):
     def outputs(self) -> dict[str, int | None]:
         """Current output state (``None`` = floating / unknown)."""
         if not self.is_functional():
-            return {pin: None for pin in self._out}
+            return dict.fromkeys(self._out)
         return dict(self._out)
 
     def evaluate(self, values: Mapping[str, int | None] | None = None) -> dict[str, int | None]:
@@ -273,7 +302,7 @@ class DUTModel(ABC):
                 self._out[pin] = value
         for left, right in self._shorts:
             if left in self._out and right in self._out:
-                merged = 1 if (self._out[left] or self._out[right]) else 0
+                merged: int | None = 1 if (self._out[left] or self._out[right]) else 0
                 if self._out[left] is None or self._out[right] is None:
                     merged = None
                 self._out[left] = self._out[right] = merged
@@ -293,7 +322,7 @@ class DUTModel(ABC):
         for left, right in self._shorts:
             if left == pin or right == pin:
                 current *= 1.0  # shorts show up in continuity, not leakage
-        return current
+        return current * self._thermal_scale("leak_tempco_per_c")
 
     def continuity_vdiode(self, pin: str, polarity: int = 1) -> float:
         """Protection-diode forward drop in volt for a small forced current.
@@ -311,7 +340,7 @@ class DUTModel(ABC):
         for left, right in self._shorts:
             if left == pin or right == pin:
                 return sign * 0.02
-        return sign * self.diode_v
+        return sign * max(0.0, self.diode_v + float(self.params["diode_tempco_v_per_c"]) * self.temperature_delta)
 
     def supply_current(self, vdd: float | None = None, *, freq_mhz: float = 0.0,
                        activity: float = 0.5) -> float:
@@ -325,7 +354,7 @@ class DUTModel(ABC):
         cap = float(self.params["idd_dynamic_nf"]) * 1e-9
         dynamic = cap * vdd * (freq_mhz * 1e6) * max(0.0, activity)
         dynamic *= self.idd_scale * self._high_idd
-        total = static + dynamic + leak
+        total = static * self._thermal_scale("idd_tempco_per_c") + dynamic + leak * self._thermal_scale("leak_tempco_per_c")
         if not self._powered:
             return 0.0
         return max(0.0, total)
@@ -334,7 +363,7 @@ class DUTModel(ABC):
     def min_period_ns(self, vdd: float | None = None) -> float:
         """Smallest clock period the DUT can run at ``vdd`` (nanoseconds)."""
         vdd = self._vdd if vdd is None else vdd
-        base = float(self.params["base_period_ns"]) * self.slow_derate
+        base = float(self.params["base_period_ns"]) * self.slow_derate * self._thermal_scale("period_tempco_per_c")
         vth = float(self.params["vth_v"]) + self.vth_shift
         if vdd <= vth + 0.05:
             return math.inf
@@ -344,7 +373,7 @@ class DUTModel(ABC):
     def max_freq_mhz(self, vdd: float | None = None) -> float:
         """Highest clock frequency in MHz at ``vdd``."""
         period = self.min_period_ns(vdd)
-        return math.inf if math.isinf(period) else 1000.0 / period
+        return 0.0 if math.isinf(period) else 1000.0 / period
 
     def output_voltage(self, pin: str, current_a: float = 0.0,
                        rout_ohm: float = 50.0) -> float | None:
@@ -356,8 +385,8 @@ class DUTModel(ABC):
         if value is None:
             return None
         drop = abs(current_a) * rout_ohm
-        volts = (self.vdd_nom - 0.1 - drop) if value else (0.05 + drop)
-        return max(0.0, min(self.vdd_nom, volts))
+        volts = (self.vdd - 0.1 - drop) if value else (0.05 + drop)
+        return max(0.0, min(self.vdd, volts))
 
     # --------------------------------------------------------------- defects
     def inject(self, defect: Defect) -> None:

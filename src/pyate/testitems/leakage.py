@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend, HALError
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["LeakageParams", "LeakageItem"]
+__all__ = ["LeakageItem", "LeakageParams"]
 
 
 class LeakageParams(TestItemParams):
@@ -32,7 +32,7 @@ class LeakageItem(TestItem):
 
     def execute(self, ctx: SiteContext, hal: HALBackend) -> list[TestResult]:
         resources = hal.site(ctx.site_id)
-        dut = ctx.dut or hal.dut(ctx.site_id)  # type: ignore[attr-defined]
+        dut = ctx.dut or hal.dut(ctx.site_id)
         if dut is None:
             raise HALError("leakage test needs a bound DUT", site=ctx.site_id)
         levels = resources.digital.levels

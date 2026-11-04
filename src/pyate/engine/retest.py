@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .context import PartResult
 
-__all__ = ["RetestConfig", "should_retest", "merge_attempt", "CONTACT_FAIL_BIN"]
+__all__ = ["CONTACT_FAIL_BIN", "RetestConfig", "merge_attempt", "should_retest"]
 
 
 #: Soft bin assigned by the flow executor when a site fails to make contact.
@@ -23,8 +23,16 @@ class RetestConfig:
     on: tuple[str, ...] = ()
     keep: str = "last"
 
+    def __post_init__(self) -> None:
+        if self.max_retries < 0:
+            raise ValueError("retest max_retries must be nonnegative")
+        if self.keep not in ("last", "best"):
+            raise ValueError("retest keep must be last or best")
+        if set(self.on) - {"fail", "contact_fail"}:
+            raise ValueError("retest on supports only fail and contact_fail")
+
     @classmethod
-    def from_session(cls, session: Any, policy: Any = None) -> "RetestConfig":
+    def from_session(cls, session: Any, policy: Any = None) -> RetestConfig:
         """Merge the session ``run.retest_bins`` with an optional batch policy."""
         bins = list(getattr(session.run, "retest_bins", []) or [])
         retries = int(getattr(session.run, "max_retries", 0) or 0)
@@ -37,7 +45,7 @@ class RetestConfig:
             keep = str(getattr(policy, "keep", keep) or keep)
             if "contact_fail" in on and CONTACT_FAIL_BIN not in bins:
                 bins.append(CONTACT_FAIL_BIN)
-        return cls(bins=sorted(set(int(b) for b in bins)), max_retries=retries,
+        return cls(bins=sorted({int(b) for b in bins}), max_retries=retries,
                    on=on, keep=keep)
 
     @property
@@ -46,7 +54,7 @@ class RetestConfig:
         return self.max_retries > 0 and bool(self.bins)
 
     @classmethod
-    def from_policy(cls, policy: Any) -> "RetestConfig":
+    def from_policy(cls, policy: Any) -> RetestConfig:
         """Build a config from any object exposing ``bins``/``max_retries``/``on``."""
         if policy is None:
             return cls()
@@ -69,25 +77,25 @@ def should_retest(part: PartResult, config: RetestConfig, attempt: int) -> bool:
         return False
     if part.extra.get("retest_exhausted"):
         return False
+    if config.on and "fail" not in config.on:
+        if "contact_fail" not in config.on or not any(r.extra.get("contact_fail") for r in part.results):
+            return False
     return True
 
 
 def merge_attempt(previous: PartResult, candidate: PartResult, keep: str = "last") -> PartResult:
     """Combine the previous verdict with the newest attempt.
 
-    ``keep="last"`` (default) takes the newest result, ``keep="best"`` keeps the
-    lowest *failing* bin when the newest attempt is still failing.
+    ``keep="last"`` takes the newest result. ``keep="best"`` preserves a
+    passing result; when both attempts fail, the newest result wins.
     """
-    candidate.extra["previous_attempts"] = [
-        *previous.extra.get("previous_attempts", []),
-        previous,
-    ]
-    candidate.extra["retest"] = True
-    candidate.retest = True
-    if keep == "best" and not candidate.passed and not previous.passed:
-        if int(previous.soft_bin) < int(candidate.soft_bin):
-            previous.extra["previous_attempts"] = candidate.extra["previous_attempts"]
-            previous.retest = True
-            previous.extra["retest"] = True
-            return previous
-    return candidate
+    if keep not in ("last", "best"):
+        raise ValueError("retest keep must be last or best")
+    history = list(previous.extra.get("previous_attempts", []))
+    old = replace(previous, extra={k: v for k, v in previous.extra.items() if k != "previous_attempts"})
+    new = replace(candidate, extra=dict(candidate.extra))
+    # Best means preserve a passing attempt; failing bin numbers are categorical.
+    selected, superseded = (old, new) if keep == "best" and old.passed and not new.passed else (new, old)
+    selected.extra = {**selected.extra, "previous_attempts": [*history, superseded], "retest": True}
+    selected.retest = True
+    return selected

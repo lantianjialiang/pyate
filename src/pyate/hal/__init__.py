@@ -26,12 +26,12 @@ from .timing import TimingController, TimingPlan
 
 __all__ = [
     "DPS",
+    "PMU",
     "DigitalChannel",
     "HALBackend",
     "HALError",
     "NotConnected",
     "OverCurrent",
-    "PMU",
     "Relay",
     "ResourceConflict",
     "SelfCheckError",

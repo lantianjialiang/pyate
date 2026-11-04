@@ -8,10 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from conftest import CP_SESSION, small_cp_overrides
 from pyate.api import EventKind, RunOptions, Session, create_run
 from pyate.datalog.stdf.reader_check import verify_stdf
-
-from conftest import CP_SESSION, small_cp_overrides
 
 
 @pytest.fixture(scope="module")
@@ -27,7 +26,7 @@ def cp_run(tmp_path_factory):
 
 
 def test_summary_reports_one_wafer(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, _output = cp_run
     assert summary.stage == "CP1"
     assert summary.seed == 42
     assert summary.total_parts > 0
@@ -38,13 +37,13 @@ def test_summary_reports_one_wafer(cp_run) -> None:
 
 
 def test_bin_counts_add_up(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, _output = cp_run
     assert sum(summary.bin_counts.values()) == summary.total_parts
     assert summary.bin_counts.get(1, 0) == summary.total_passed
 
 
 def test_every_expected_artefact_exists(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, _summary, output = cp_run
     assert (output / "summary.json").is_file()
     assert (output / "run_snapshot.yaml").is_file()
     assert (output / "W01_summary.json").is_file()
@@ -55,7 +54,7 @@ def test_every_expected_artefact_exists(cp_run) -> None:
 
 
 def test_stdf_passes_structural_verification(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, output = cp_run
     stdf = sorted(output.glob("*.stdf"))[0]
     report = verify_stdf(stdf)
     assert report.ok, report.errors[:3]
@@ -69,7 +68,7 @@ def test_stdf_passes_structural_verification(cp_run) -> None:
 
 
 def test_wafer_map_bins_match_the_stdf_bins(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, output = cp_run
     rows = list(csv.DictReader((output / "W01_binmap.csv").open(encoding="utf-8")))
     assert rows
     bins: dict[int, int] = {}
@@ -82,7 +81,7 @@ def test_wafer_map_bins_match_the_stdf_bins(cp_run) -> None:
 
 
 def test_wafer_summary_is_consistent_with_the_run(cp_run) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, output = cp_run
     data = json.loads((output / "W01_summary.json").read_text(encoding="utf-8"))
     assert data["unit_id"] == "W01"
     assert data["kind"] == "wafer"
@@ -113,7 +112,7 @@ def test_event_stream_covers_the_whole_lot(tmp_path) -> None:
 
 
 def test_rerun_is_reproducible(cp_run, tmp_path) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, _output = cp_run
     again = create_run(CP_SESSION, small_cp_overrides(), RunOptions(output_dir=tmp_path))
     again.prepare()
     other = again.run()
@@ -123,7 +122,7 @@ def test_rerun_is_reproducible(cp_run, tmp_path) -> None:
 
 
 def test_changing_the_seed_changes_the_die_map(cp_run, tmp_path) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, _output = cp_run
     other = create_run(CP_SESSION, small_cp_overrides(**{"run.seed": 4242}),
                        RunOptions(output_dir=tmp_path))
     other.prepare()
@@ -133,7 +132,7 @@ def test_changing_the_seed_changes_the_die_map(cp_run, tmp_path) -> None:
 
 
 def test_site_count_override_is_honoured(cp_run, tmp_path) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, _output = cp_run
     single = create_run(CP_SESSION, small_cp_overrides(**{"run.sites": 1}),
                         RunOptions(output_dir=tmp_path))
     single.prepare()
@@ -143,7 +142,7 @@ def test_site_count_override_is_honoured(cp_run, tmp_path) -> None:
 
 
 def test_only_restricts_the_executed_items(cp_run, tmp_path) -> None:
-    session, handle, summary, output = cp_run
+    _session, _handle, summary, output = cp_run
     limited = create_run(CP_SESSION, small_cp_overrides(),
                          RunOptions(output_dir=tmp_path, only=["continuity"]))
     limited.prepare()

@@ -12,14 +12,13 @@ os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.*=false")
 
 pytest.importorskip("PySide6", reason="GUI extras are not installed")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication
 
-from pyate.gui.app import create_window  # noqa: E402
-from pyate.gui.main_window import MainWindow  # noqa: E402
-from pyate.gui.theme import canvas_colors, set_theme, stylesheet  # noqa: E402
-from pyate.gui.widgets import WaferMapWidget  # noqa: E402
-
-from conftest import CONFIGS, CP_SESSION  # noqa: E402
+from conftest import CONFIGS, CP_SESSION
+from pyate.gui.app import create_window
+from pyate.gui.main_window import MainWindow
+from pyate.gui.theme import canvas_colors, set_theme, stylesheet
+from pyate.gui.widgets import WaferMapWidget
 
 
 @pytest.fixture(scope="session")
@@ -44,7 +43,7 @@ def finished_window(qapp: QApplication, tmp_path_factory: pytest.TempPathFactory
     win = MainWindow(str(CP_SESSION))
     # keep the run short and the repository clean
     win.run_panel.output_dir = str(out_dir)
-    win.run_panel.extra_overrides = {"lot.wafers": ["W01"]}
+    win.run_panel.extra_overrides = {"lot.wafers": ["W01"], "wafer.diameter_mm": 80}
     handle = win.run_smoke(sites=2)
     assert handle is not None
     assert handle.wait(180.0), "GUI run did not finish"

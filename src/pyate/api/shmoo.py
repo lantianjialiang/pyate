@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import csv
 import io
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from .session import Session
 
-__all__ = ["normalize_shmoo", "shmoo_csv", "run_shmoo"]
+__all__ = ["normalize_shmoo", "run_shmoo", "shmoo_csv"]
 
 
 def normalize_shmoo(data: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -85,6 +86,7 @@ def run_shmoo(
     loaded = session.load()
     hal = SimulatedHAL.from_session(loaded, site_count=max(1, int(site)))
     dut = create_dut(loaded.dut_profile, seed=int(loaded.run.seed), sample_yield=False)
+    dut.set_temperature(loaded.temperature())
     hal.bind_dut(int(site), dut)
     vdd = float(loaded.levels_for().vdd.nom)
     supply = hal.site(int(site)).dps

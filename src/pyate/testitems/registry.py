@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 from .base import TestItem
 
-__all__ = ["register_testitem", "get_testitem_class", "create_testitem",
-           "list_testitems", "is_registered"]
+__all__ = [
+    "create_testitem",
+    "get_testitem_class",
+    "is_registered",
+    "list_testitems",
+    "register_testitem",
+]
 
 _REGISTRY: dict[str, type[TestItem]] = {}
 T = TypeVar("T", bound=type[TestItem])

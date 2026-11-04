@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+from conftest import CONFIGS, CP_SESSION
 from pyate.config.loader import load_session
 from pyate.dut.registry import create_dut
 from pyate.engine.binning import BinningEngine
@@ -18,8 +19,6 @@ from pyate.hal.simulated import SimulatedHAL
 from pyate.pattern.parser import load_pattern
 from pyate.testitems.base import LimitsTable
 
-from conftest import CONFIGS, CP_SESSION
-
 FLOW = [
     {"item": "continuity", "test_num": 1000, "params": {"pins": ["RSTN", "EN"]}},
     {"item": "idd_static", "test_num": 2000},
@@ -29,13 +28,14 @@ FLOW = [
 
 
 def _session():
-    return load_session(CP_SESSION, {"run.sites": 4, "run.seed": 42, "lot.wafers": ["W01"],
-                                     "wafer.diameter_mm": 150})
+    return load_session(
+        CP_SESSION, {"run.sites": 4, "run.seed": 42, "lot.wafers": ["W01"], "wafer.diameter_mm": 150}
+    )
 
 
 def _build(session, site_count: int):
     hal = SimulatedHAL.from_session(session, site_count=site_count)
-    nodes = [type(session.program.flow("CP1")[0]) .model_validate(node) for node in FLOW]
+    nodes = [type(session.program.flow("CP1")[0]).model_validate(node) for node in FLOW]
     contexts = []
     for site in range(1, site_count + 1):
         dut = create_dut(session.dut_profile, seed=7, x=site, y=1, sample_yield=False)
@@ -51,20 +51,23 @@ def _scheduler(session, hal, nodes, mode: str, events=None) -> SiteScheduler:
     def factory(barrier):
         if barrier is None:
             return FlowExecutor(
-                program_nodes=nodes, stage="CP1",
+                program_nodes=nodes,
+                stage="CP1",
                 limits=LimitsTable(session.limits),
-                binning=BinningEngine(session.binning), hal=hal,
+                binning=BinningEngine(session.binning),
+                hal=hal,
                 events=events or EventBus(),
-                pattern_loader=lambda name: load_pattern(
-                    CONFIGS / "demo_cp" / "patterns" / name),
+                pattern_loader=lambda name: load_pattern(CONFIGS / "demo_cp" / "patterns" / name),
             )
         return FlowExecutor(
-            program_nodes=nodes, stage="CP1",
+            program_nodes=nodes,
+            stage="CP1",
             limits=LimitsTable(session.limits),
-            binning=BinningEngine(session.binning), hal=hal,
-            events=events or EventBus(), barrier=barrier,
-            pattern_loader=lambda name: load_pattern(
-                CONFIGS / "demo_cp" / "patterns" / name),
+            binning=BinningEngine(session.binning),
+            hal=hal,
+            events=events or EventBus(),
+            barrier=barrier,
+            pattern_loader=lambda name: load_pattern(CONFIGS / "demo_cp" / "patterns" / name),
         )
 
     return SiteScheduler(factory, mode=mode, events=events or EventBus())
@@ -92,7 +95,7 @@ def test_thread_and_serial_modes_agree() -> None:
 
 def test_unknown_mode_is_rejected() -> None:
     session = _session()
-    hal, nodes, contexts = _build(session, 1)
+    hal, nodes, _contexts = _build(session, 1)
     with pytest.raises(ValueError):
         _scheduler(session, hal, nodes, "quantum")
 
@@ -205,12 +208,14 @@ def test_scheduler_with_barrier_keeps_sites_in_step() -> None:
         with spies_lock:
             spies.append(spy)
         return FlowExecutor(
-            program_nodes=nodes, stage="CP1",
+            program_nodes=nodes,
+            stage="CP1",
             limits=LimitsTable(session.limits),
-            binning=BinningEngine(session.binning), hal=hal,
-            events=EventBus(), barrier=spy,
-            pattern_loader=lambda name: load_pattern(
-                CONFIGS / "demo_cp" / "patterns" / name),
+            binning=BinningEngine(session.binning),
+            hal=hal,
+            events=EventBus(),
+            barrier=spy,
+            pattern_loader=lambda name: load_pattern(CONFIGS / "demo_cp" / "patterns" / name),
         )
 
     parts = SiteScheduler(factory, mode="thread").run_touchdown(contexts)
@@ -233,12 +238,14 @@ def test_sequential_mode_does_not_synchronise() -> None:
     def factory(barrier: SiteBarrier | None) -> FlowExecutor:
         seen.append(barrier)
         return FlowExecutor(
-            program_nodes=nodes, stage="CP1",
+            program_nodes=nodes,
+            stage="CP1",
             limits=LimitsTable(session.limits),
-            binning=BinningEngine(session.binning), hal=hal,
-            events=EventBus(), barrier=barrier,
-            pattern_loader=lambda name: load_pattern(
-                CONFIGS / "demo_cp" / "patterns" / name),
+            binning=BinningEngine(session.binning),
+            hal=hal,
+            events=EventBus(),
+            barrier=barrier,
+            pattern_loader=lambda name: load_pattern(CONFIGS / "demo_cp" / "patterns" / name),
         )
 
     SiteScheduler(factory, mode="sequential").run_touchdown(contexts)
@@ -256,3 +263,93 @@ def test_estimate_uph_accounts_for_index_time() -> None:
     with_index = estimate_uph(4, 100.0, 50.0)
     without = estimate_uph(4, 100.0)
     assert with_index < without
+
+
+def test_process_mode_is_not_silently_run_as_threads() -> None:
+    with pytest.raises(ValueError, match="process is not implemented"):
+        SiteScheduler(lambda barrier: None, mode="process")
+
+
+@pytest.mark.parametrize("stop_then", [False, True])
+def test_opposite_branches_follow_the_same_static_phases(stop_then) -> None:
+    session = _session()
+    hal, _, contexts = _build(session, 4)
+    def delay(number):
+        return {"item": "delay_ms", "test_num": number, "params": {"ms": 0.01}}
+    then = [{"loop": {"count": 2, "items": [delay(4100)]}}, delay(4200)]
+    if stop_then:
+        then = [{"goto_bin": 1}]
+    raw = [
+        {
+            "branch": {
+                "if": "var('take_then')",
+                "then": then,
+                "else": [{"branch": {"if": "True", "then": [delay(4300)], "else": [delay(4400)]}}],
+            }
+        },
+        delay(4500),
+    ]
+    nodes = [type(session.program.flow("CP1")[0]).model_validate(node) for node in raw]
+    spies = []
+    for ctx in contexts:
+        ctx.vars["take_then"] = ctx.site_id % 2 == 1
+
+    def factory(barrier):
+        spy = _SpyBarrier(barrier)
+        spies.append(spy)
+        return FlowExecutor(
+            program_nodes=nodes,
+            stage="CP1",
+            limits=LimitsTable(session.limits),
+            binning=BinningEngine(session.binning),
+            hal=hal,
+            barrier=spy,
+        )
+
+    scheduler = SiteScheduler(factory)
+    try:
+        parts = scheduler.run_touchdown(contexts)
+    finally:
+        scheduler.close()
+    assert not any("error" in part.extra for part in parts)
+    for part in parts:
+        actual = [row.test_num for row in part.results]
+        expected = ([4100, 4100, 4200, 4500] if not stop_then else []) if part.site % 2 else [4300, 4500]
+        assert actual == expected
+    if not stop_then:
+        assert {spy.waits for spy in spies} == {6}
+
+
+def test_barrier_timeout_is_visible_to_all_waiters() -> None:
+    barrier = SiteBarrier(3)
+    failures = []
+
+    def worker():
+        try:
+            barrier.wait(timeout=0.05)
+        except TimeoutError:
+            failures.append(True)
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+    assert failures == [True, True]
+    with pytest.raises(TimeoutError):
+        barrier.wait()
+
+
+def test_scheduler_reuses_workers_between_touchdowns() -> None:
+    session = _session()
+    hal, nodes, contexts = _build(session, 4)
+    scheduler = _scheduler(session, hal, nodes, "thread")
+    try:
+        scheduler.run_touchdown(contexts)
+        pool = scheduler._pool
+        _, _, next_contexts = _build(session, 4)
+        scheduler.run_touchdown(next_contexts)
+        assert scheduler._pool is pool
+    finally:
+        scheduler.close()
+    assert scheduler._pool is None

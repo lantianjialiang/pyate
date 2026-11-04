@@ -9,14 +9,17 @@ happens at most once per ``throttle_ms``.
 from __future__ import annotations
 
 import math
+import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from functools import wraps
+from typing import Any
 
 from ...api import Event, EventBus, EventKind, normalize_shmoo
 
-__all__ = ["DatalogRow", "LogEntry", "RunViewModel", "TestSummaryRow", "DIFFICULTY_BINS"]
+__all__ = ["DIFFICULTY_BINS", "DatalogRow", "LogEntry", "RunViewModel", "TestSummaryRow"]
 
 
 @dataclass(frozen=True)
@@ -102,9 +105,7 @@ def _cp_cpk(mean: float | None, stdev: float | None,
     if mean is None or stdev is None:
         return None, None
     if stdev <= 0:
-        cp = 0.0 if lo is not None and hi is not None else None
-        cpk = 0.0 if lo is not None or hi is not None else None
-        return cp, cpk
+        return None, None
     cp = (hi - lo) / (6.0 * stdev) if lo is not None and hi is not None else None
     sides: list[float] = []
     if lo is not None:
@@ -124,6 +125,8 @@ class _Acc:
     numeric: int = 0
     total: float = 0.0
     total_sq: float = 0.0
+    mean: float = 0.0
+    m2: float = 0.0
     minimum: float | None = None
     maximum: float | None = None
     lo: float | None = None
@@ -134,19 +137,31 @@ class _Acc:
 DIFFICULTY_BINS = (2, 3, 4, 5, 6, 7, 8, 9)
 
 
+def _synchronized(func):
+    @wraps(func)
+    def wrapped(self, *args, **kwargs):
+        with self.lock:
+            return func(self, *args, **kwargs)
+    return wrapped
+
+
 class RunViewModel:
     """Aggregates run events into a render friendly snapshot."""
 
     def __init__(self, *, max_rows: int = 500, max_logs: int = 500,
-                 throttle_ms: int = 50) -> None:
+                 throttle_ms: int = 50, max_history_parts: int = 1000) -> None:
         self.max_rows = int(max_rows)
         self.max_logs = int(max_logs)
         self.throttle_ms = int(throttle_ms)
+        self.max_history_parts = int(max_history_parts)
+        if min(self.max_rows, self.max_logs, self.max_history_parts) < 1:
+            raise ValueError("view model buffer sizes must be positive")
         self.events: EventBus | None = None
+        self.lock = threading.RLock()
         self.reset()
 
     # ------------------------------------------------------------------ setup
-    def attach(self, events: EventBus) -> "RunViewModel":
+    def attach(self, events: EventBus) -> RunViewModel:
         """Subscribe to every interesting topic of ``events``."""
         self.events = events
         for kind in (EventKind.TEST_RESULT, EventKind.PART_END, EventKind.BIN_RESULT,
@@ -167,17 +182,21 @@ class RunViewModel:
             self.events.unsubscribe(kind, self.on_event)
         self.events = None
 
+    @_synchronized
     def reset(self) -> None:
         """Drop every collected value (start of a new run)."""
         self._rows: deque[DatalogRow] = deque(maxlen=self.max_rows)
-        self._pending: list[DatalogRow] = []
+        self._pending: deque[DatalogRow] = deque(maxlen=self.max_rows)
         self._logs: deque[LogEntry] = deque(maxlen=self.max_logs)
-        self._pending_logs: list[LogEntry] = []
+        self._pending_logs: deque[LogEntry] = deque(maxlen=self.max_logs)
         self._series: dict[int, deque[float]] = {}
         self._site_series: dict[tuple[int, int], deque[float]] = {}
         self._wafer_series: dict[tuple[int, str], deque[float]] = {}
-        self._samples: dict[tuple[int, int, str, str], list[float]] = {}
+        self._samples: dict[tuple[int, int, str, str], deque[float]] = {}
         self._acc: dict[tuple[int, int, str, str], _Acc] = {}
+        self._totals: dict[tuple[int, int, str, str], _Acc] = {}
+        self._history_keys: OrderedDict[tuple[str, str], set[tuple[int, int, str, str]]] = OrderedDict()
+        self.history_evictions = 0
         self._test_names: dict[int, str] = {}
         self._shmoo: dict[str, Any] = {}
         self.parts = 0
@@ -212,6 +231,7 @@ class RunViewModel:
         self.total_events = 0
 
     # ----------------------------------------------------------------- events
+    @_synchronized
     def on_event(self, event: Event) -> None:
         """Handle one event (never renders)."""
         self.total_events += 1
@@ -283,30 +303,27 @@ class RunViewModel:
         self._pending.append(row)
         self._test_names[row.test_num] = row.name
         wafer = self.unit or ""
-        acc = self._acc.setdefault((row.test_num, row.site, wafer, part), _Acc(name=row.name))
-        acc.name = row.name or acc.name
-        acc.count += 1
-        if row.passed:
-            acc.passed += 1
-        if isinstance(row.value, (int, float)) and not isinstance(row.value, bool):
+        key = (row.test_num, row.site, wafer, part)
+        history_key = (wafer, part)
+        self._history_keys.setdefault(history_key, set()).add(key)
+        self._history_keys.move_to_end(history_key)
+        while len(self._history_keys) > self.max_history_parts:
+            _, expired = self._history_keys.popitem(last=False)
+            for old_key in expired:
+                self._samples.pop(old_key, None)
+                self._acc.pop(old_key, None)
+            self.history_evictions += 1
+        acc = self._acc.setdefault(key, _Acc(name=row.name))
+        total = self._totals.setdefault((row.test_num, row.site, wafer, ""), _Acc(name=row.name))
+        _accumulate(acc, row)
+        _accumulate(total, row)
+        if (isinstance(row.value, (int, float)) and not isinstance(row.value, bool)
+                and math.isfinite(row.value)):
             value = float(row.value)
             self._series.setdefault(row.test_num, deque(maxlen=80)).append(value)
             self._site_series.setdefault((row.test_num, row.site), deque(maxlen=80)).append(value)
             self._wafer_series.setdefault((row.test_num, wafer), deque(maxlen=80)).append(value)
-            samples = self._samples.setdefault((row.test_num, row.site, wafer, part), [])
-            if len(samples) < 4000:
-                samples.append(value)
-            acc.numeric += 1
-            acc.total += value
-            acc.total_sq += value * value
-            acc.minimum = value if acc.minimum is None else min(acc.minimum, value)
-            acc.maximum = value if acc.maximum is None else max(acc.maximum, value)
-        lo = _spec_limit(row.lo)
-        hi = _spec_limit(row.hi)
-        if lo is not None:
-            acc.lo = lo
-        if hi is not None:
-            acc.hi = hi
+            self._samples.setdefault(key, deque(maxlen=4000)).append(value)
         extra = result.get("extra") or {}
         if extra.get("shmoo"):
             self.set_shmoo(extra.get("shmoo"))
@@ -439,21 +456,25 @@ class RunViewModel:
         return 100.0 * self.passed / self.parts if self.parts else 0.0
 
     @property
+    @_synchronized
     def rows(self) -> list[DatalogRow]:
         """Buffered datalog rows (newest last)."""
         return list(self._rows)
 
     @property
+    @_synchronized
     def logs(self) -> list[LogEntry]:
         """Buffered log entries."""
         return list(self._logs)
 
+    @_synchronized
     def bin_rows(self) -> list[tuple[int, int, float]]:
         """``(bin, count, pct)`` rows sorted by count."""
         total = sum(self.bins.values()) or 1
         return [(soft, count, 100.0 * count / total)
                 for soft, count in sorted(self.bins.items(), key=lambda kv: (-kv[1], kv[0]))]
 
+    @_synchronized
     def snapshot(self) -> dict[str, Any]:
         """Cheap summary for the stats panel."""
         return {
@@ -478,9 +499,12 @@ class RunViewModel:
             "finished": self.finished,
             "aborted": self.aborted,
             "error": self.error,
+            "history_parts": len(self._history_keys),
+            "history_evictions": self.history_evictions,
         }
 
     # --------------------------------------------------------------- throttle
+    @_synchronized
     def should_render(self, now: float | None = None) -> bool:
         """True when enough time passed since the last render (throttling)."""
         moment = time.monotonic() if now is None else now
@@ -492,9 +516,11 @@ class RunViewModel:
         self._dirty = False
         return True
 
+    @_synchronized
     def take_rows(self) -> list[DatalogRow]:
         """Return the rows added since the previous call."""
-        rows, self._pending = self._pending, []
+        rows = list(self._pending)
+        self._pending.clear()
         return rows
 
     def frames_per_second(self) -> float:
@@ -511,15 +537,19 @@ class RunViewModel:
         """All buffered failing rows."""
         return [row for row in self._rows if not row.passed]
 
+    @_synchronized
     def take_logs(self) -> list[LogEntry]:
         """Return the log lines added since the previous call."""
-        rows, self._pending_logs = self._pending_logs, []
+        rows = list(self._pending_logs)
+        self._pending_logs.clear()
         return rows
 
+    @_synchronized
     def test_numbers(self) -> list[tuple[int, str]]:
         """Tests seen so far, in numeric order."""
         return [(num, self._test_names.get(num, "")) for num in sorted(self._test_names)]
 
+    @_synchronized
     def trend(self, test_num: int, site: int | None = None,
               wafer: str | None = None, part: str | None = None) -> list[float]:
         """Recent measured values of one test (oldest first)."""
@@ -552,6 +582,7 @@ class RunViewModel:
             return []
         return [(value, _norm_ppf((index + 0.5) / count)) for index, value in enumerate(data)]
 
+    @_synchronized
     def summary_rows(self, *, by_site: bool = False,
                      group: str | None = None,
                      groups: Iterable[str] | None = None) -> list[TestSummaryRow]:
@@ -563,7 +594,8 @@ class RunViewModel:
         """
         selected = _group_names(group, by_site=by_site, groups=groups)
         grouped: dict[tuple[int, int | None, str | None, str | None], _Acc] = {}
-        for (test_num, site, wafer, part), acc in self._acc.items():
+        source = self._acc if "part" in selected else self._totals
+        for (test_num, site, wafer, part), acc in source.items():
             key = (
                 test_num,
                 site if "site" in selected else None,
@@ -575,6 +607,7 @@ class RunViewModel:
                 grouped[key] = _Acc(
                     name=acc.name, count=acc.count, passed=acc.passed,
                     numeric=acc.numeric, total=acc.total, total_sq=acc.total_sq,
+                    mean=acc.mean, m2=acc.m2,
                     minimum=acc.minimum, maximum=acc.maximum,
                     lo=acc.lo, hi=acc.hi,
                 )
@@ -582,6 +615,11 @@ class RunViewModel:
             bucket.name = acc.name or bucket.name
             bucket.count += acc.count
             bucket.passed += acc.passed
+            if acc.numeric:
+                combined = bucket.numeric + acc.numeric
+                delta = acc.mean - bucket.mean
+                bucket.m2 += acc.m2 + delta * delta * bucket.numeric * acc.numeric / combined
+                bucket.mean += delta * acc.numeric / combined
             bucket.numeric += acc.numeric
             bucket.total += acc.total
             bucket.total_sq += acc.total_sq
@@ -595,7 +633,7 @@ class RunViewModel:
                 bucket.hi = acc.hi
         rows: list[TestSummaryRow] = []
         for (test_num, site, wafer, part), acc in grouped.items():
-            mean = (acc.total / acc.numeric) if acc.numeric else None
+            mean = acc.mean if acc.numeric else None
             stdev = _stdev(acc)
             cp, cpk = _cp_cpk(mean, stdev, acc.lo, acc.hi)
             rows.append(TestSummaryRow(
@@ -624,6 +662,7 @@ class RunViewModel:
         ))
         return rows
 
+    @_synchronized
     def _values(self, test_num: int, site: int | None = None,
                 wafer: str | None = None, part: str | None = None) -> list[float]:
         values: list[float] = []
@@ -639,13 +678,15 @@ class RunViewModel:
             values.extend(samples)
         return values
 
+    @_synchronized
     def limits_of(self, test_num: int, site: int | None = None,
                   wafer: str | None = None,
                   part: str | None = None) -> tuple[float | None, float | None]:
         """Spec limits for the same slice the summary charts are showing."""
         lo: float | None = None
         hi: float | None = None
-        for (num, sample_site, sample_wafer, sample_part), acc in self._acc.items():
+        source = self._acc if part is not None else self._totals
+        for (num, sample_site, sample_wafer, sample_part), acc in source.items():
             if num != int(test_num):
                 continue
             if site is not None and sample_site != int(site):
@@ -669,6 +710,7 @@ class RunViewModel:
         self._shmoo = normalize_shmoo(data)
         self._dirty = True
 
+    @_synchronized
     def add_measurement(self, *, test_num: int, name: str, site: int,
                         value: float | None, passed: bool, wafer: str = "",
                         part: str = "",
@@ -690,14 +732,30 @@ class RunViewModel:
         }})
 
 
+def _accumulate(acc: _Acc, row: DatalogRow) -> None:
+    acc.name = row.name or acc.name
+    acc.count += 1
+    acc.passed += int(row.passed)
+    if (isinstance(row.value, (int, float)) and not isinstance(row.value, bool)
+            and math.isfinite(row.value)):
+        value = float(row.value)
+        acc.numeric += 1
+        delta = value - acc.mean
+        acc.mean += delta / acc.numeric
+        acc.m2 += delta * (value - acc.mean)
+        acc.total += value
+        acc.total_sq += value * value
+        acc.minimum = value if acc.minimum is None else min(acc.minimum, value)
+        acc.maximum = value if acc.maximum is None else max(acc.maximum, value)
+    acc.lo = _spec_limit(row.lo)
+    acc.hi = _spec_limit(row.hi)
+
+
 def _stdev(acc: _Acc) -> float | None:
     """Sample standard deviation. ``None`` when the test has no numeric value."""
-    if acc.numeric < 1:
+    if acc.numeric < 2:
         return None
-    if acc.numeric == 1:
-        return 0.0
-    mean = acc.total / acc.numeric
-    variance = (acc.total_sq - acc.numeric * mean * mean) / (acc.numeric - 1)
+    variance = acc.m2 / (acc.numeric - 1)
     return math.sqrt(max(0.0, variance))
 
 

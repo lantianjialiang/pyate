@@ -15,16 +15,17 @@ Both rules are deliberately simple (see ``docs/DECISIONS.md``, D18).
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from ..datalog.factory import build_sinks
 from ..engine.controller import RunController, RunSummary
 from ..engine.events import EventBus
 from .session import Session
 
-__all__ = ["StageOutcome", "LotReport", "LotRunner", "run_lot"]
+__all__ = ["LotReport", "LotRunner", "StageOutcome", "run_lot"]
 
 #: A known-good die: ``(wafer_id, x, y)``.
 Die = tuple[str, int, int]
@@ -160,6 +161,8 @@ class LotRunner:
         self.retest_keep = retest_keep
         root = Path(output_dir) if output_dir is not None else None
         self.output_dir = root
+        self.population: dict[str, Any] = {}
+        self.surviving_parts: list[str] | None = None
 
     # ------------------------------------------------------------------ plan
     def planned_stages(self) -> list[str]:
@@ -198,11 +201,16 @@ class LotRunner:
     def _run_stage(self, stage: str, kgd: set[Die] | None, root: Path) -> StageOutcome:
         api_session = self.session_for(stage)
         session = api_session.load(force=True)
+        primary = self.session.load()
+        if session.lot is not None and primary.lot is not None:
+            session.lot = session.lot.model_copy(update={"lot_id": primary.lot.lot_id})
         site_count = int(session.site_count())
         stage_dir = root / stage
         stage_dir.mkdir(parents=True, exist_ok=True)
         die_filter = kgd if _is_wafer_stage(stage) and kgd is not None else None
         part_ids = self._part_ids_for(stage, kgd)
+        if not _is_wafer_stage(stage) and self.surviving_parts is not None:
+            part_ids = self.surviving_parts
         sinks = self.sinks
         if sinks is None:
             sinks = build_sinks(session, stage=stage, output_dir=stage_dir,
@@ -218,8 +226,12 @@ class LotRunner:
             die_filter=die_filter,
             part_ids=part_ids,
             retest_keep=self.retest_keep,
+            population=self.population,
         )
         summary = controller.run()
+        if not _is_wafer_stage(stage):
+            self.surviving_parts = [p.part_id for unit in summary.units
+                                    for p in controller.part_results(unit.unit_id) if p.passed]
         passed = self._kgd_from(summary, int(session.binning.pass_bin))
         return StageOutcome(stage=stage, summary=summary, kgd=passed,
                             die_filter=die_filter, part_ids=part_ids,

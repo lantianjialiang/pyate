@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["SramMarchParams", "SramMarchItem"]
+__all__ = ["SramMarchItem", "SramMarchParams"]
 
 
 class SramMarchParams(TestItemParams):
@@ -26,7 +26,7 @@ class SramMarchItem(TestItem):
     description = "March C- memory test"
 
     def execute(self, ctx: SiteContext, hal: HALBackend) -> list[TestResult]:
-        dut = ctx.dut or hal.dut(ctx.site_id)  # type: ignore[attr-defined]
+        dut = ctx.dut or hal.dut(ctx.site_id)
         if dut is None or not hasattr(dut, "sram_write"):
             result = self.make_result(ctx, name="sram_march", value=None, kind="FTR")
             result.fail(self.params.fail_code)
@@ -45,14 +45,20 @@ class SramMarchItem(TestItem):
         fail_got = 0
         operations = 0
 
+        assert dut is not None
+        reader = dut.sram_read
+        writer = dut.sram_write
+
         def write(address: int, data: int) -> None:
             nonlocal operations
-            dut.sram_write(address, data & mask)
+            writer(address, data & mask)
+            hal.add_time(ctx.site_id, 0.00002)
             operations += 1
 
         def check(address: int, expected: int) -> bool:
             nonlocal operations, fail_address, fail_expect, fail_got
-            got = dut.sram_read(address)
+            got = int(reader(address))
+            hal.add_time(ctx.site_id, 0.00002)
             operations += 1
             if got != (expected & mask) and fail_address is None:
                 fail_address = address

@@ -3,12 +3,12 @@ pins:
   type: power
   sites:
     1: 1
-    2: 33
+    2: 3
 - pin: VSS
   type: power
   sites:
     1: 2
-    2: 34
+    2: 4
 - pin: CLK
   type: in
   sites:

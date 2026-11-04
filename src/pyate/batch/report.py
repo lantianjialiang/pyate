@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Iterable, Sequence
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from ..datalog.result import bin_pareto
 
-__all__ = ["aggregate_report", "merge_capability", "load_capability"]
+__all__ = ["aggregate_report", "load_capability", "merge_capability"]
 
 
 def load_capability(stats_path: str | Path | None) -> list[dict[str, Any]]:
@@ -34,14 +35,17 @@ def merge_capability(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     ``sigma`` using the parallel-variance identity:
     ``SS = sum((n_i-1)*s_i^2 + n_i*(m_i-m)^2)``.
     """
-    buckets: dict[int, list[dict[str, Any]]] = {}
+    buckets: dict[tuple, list[dict[str, Any]]] = {}
     for row in rows:
         count = int(row.get("count") or 0)
         if count <= 0:
             continue
-        buckets.setdefault(int(row["test_num"]), []).append(row)
+        key = (int(row["test_num"]), row.get("name", ""), row.get("lo"), row.get("hi"),
+               row.get("unit", ""), row.get("stage", ""), row.get("temperature"), row.get("revision", ""))
+        buckets.setdefault(key, []).append(row)
     merged: list[dict[str, Any]] = []
-    for test_num, group in sorted(buckets.items()):
+    for key, group in sorted(buckets.items(), key=lambda item: repr(item[0])):
+        test_num = key[0]
         total = sum(int(row["count"]) for row in group)
         mean = sum(float(row["mean"]) * int(row["count"]) for row in group) / total
         ss = 0.0
@@ -71,8 +75,9 @@ def merge_capability(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
             "max": max(float(row.get("max", mean)) for row in group),
             "lo": lo,
             "hi": hi,
-            "cp": round(cp, 4),
-            "cpk": round(min(candidates), 4) if candidates else 0.0,
+            "unit": key[4], "stage": key[5], "temperature": key[6], "revision": key[7],
+            "cp": round(cp, 4) if total > 1 and sigma > 0 and lo is not None and hi is not None else None,
+            "cpk": round(min(candidates), 4) if total > 1 and candidates else None,
         })
     return merged
 

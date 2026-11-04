@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend, HALError
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 from .vdd_sweep import _load_pattern, _run, _set_period, _set_supply
 
-__all__ = ["ShmooParams", "ShmooItem"]
+__all__ = ["ShmooItem", "ShmooParams"]
 
 
 class ShmooParams(TestItemParams):

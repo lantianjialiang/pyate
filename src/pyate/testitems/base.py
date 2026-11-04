@@ -11,7 +11,7 @@ from ..config.models import Limit, LimitsConfig
 from ..engine.context import SiteContext, TestResult
 from ..hal.base import HALBackend
 
-__all__ = ["TestItemParams", "TestItem", "LimitsTable", "PatternCache"]
+__all__ = ["LimitsTable", "PatternCache", "TestItem", "TestItemParams"]
 
 #: ``TestResult`` fields that ``make_result`` forwards instead of storing in ``extra``.
 _RESULT_FIELDS = frozenset({
@@ -26,6 +26,7 @@ class TestItemParams(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     fail_code: int = Field(default=0, description="fail code reported when this item fails")
+    requires_limits: bool = False
 
 
 class LimitsTable:
@@ -37,7 +38,7 @@ class LimitsTable:
             self._rows.setdefault(row.test_num, []).append(row)
 
     @classmethod
-    def from_config(cls, limits: LimitsConfig | None) -> "LimitsTable":
+    def from_config(cls, limits: LimitsConfig | None) -> LimitsTable:
         """Build from a loaded limits config."""
         return cls(limits)
 
@@ -46,7 +47,7 @@ class LimitsTable:
         candidates = [row for row in self._rows.get(test_num, []) if row.matches(stage, temperature)]
         if not candidates:
             return None
-        candidates.sort(key=lambda row: (row.stage != "*", row.temp_max - row.temp_min))
+        candidates.sort(key=lambda row: (row.stage != stage, row.temp_max - row.temp_min))
         return candidates[0]
 
     def all_for(self, test_num: int) -> list[Limit]:

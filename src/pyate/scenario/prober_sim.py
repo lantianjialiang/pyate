@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Iterator
+from collections.abc import Iterator
 
 from ..config.models import ProberConfig
 from ..engine.context import TouchdownInfo
@@ -75,6 +75,15 @@ class ProberSimulator:
                                          if site not in {entry[0] for entry in entries}],
                     },
                 )
+
+    def touchdown_count(self) -> int:
+        """Count occupied geometry windows without materializing touchdowns or RNG draws."""
+        cols, rows = self._footprint()
+        capacity = min(self.sites, cols * rows)
+        min_x, max_x, min_y, max_y = self.wafer.grid_bounds()
+        return sum(bool(self._window(x, y, cols, rows, capacity, self.config.scan == "column"))
+                   for x in range(min_x, max_x + 1, cols)
+                   for y in range(min_y, max_y + 1, rows))
 
     def _window(self, start_x: int, start_y: int, cols: int, rows: int,
                 capacity: int, column_scan: bool) -> list[tuple[int, int, int, str]]:

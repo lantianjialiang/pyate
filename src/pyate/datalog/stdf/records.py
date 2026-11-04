@@ -7,14 +7,33 @@ binary compatible with ``pystdf`` (which is used by ``stdf verify``).
 from __future__ import annotations
 
 import struct
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 __all__ = [
-    "RecordSpec", "RECORDS", "encode_record", "decode_record", "encode_dn",
+    "ATR",
+    "FAR",
+    "FTR",
+    "HBR",
+    "MIR",
+    "MRR",
+    "PCR",
+    "PIR",
+    "PRR",
+    "PTR",
+    "RECORDS",
+    "SBR",
+    "SDR",
+    "TSR",
+    "WCR",
+    "WIR",
+    "WRR",
+    "RecordSpec",
+    "decode_record",
+    "encode_dn",
+    "encode_record",
     "normalize_endian",
-    "FAR", "ATR", "MIR", "MRR", "PCR", "HBR", "SBR", "SDR", "WIR", "WRR",
-    "PIR", "PRR", "PTR", "FTR", "TSR", "WCR",
 ]
 
 
@@ -61,6 +80,10 @@ HBR = RecordSpec("HBR", 1, 40, (
 SBR = RecordSpec("SBR", 1, 50, (
     ("HEAD_NUM", "U1"), ("SITE_NUM", "U1"), ("SBIN_NUM", "U2"), ("SBIN_CNT", "U4"),
     ("SBIN_PF", "C1"), ("SBIN_NAM", "Cn"),
+))
+PMR = RecordSpec("PMR", 1, 60, (
+    ("PMR_INDX", "U2"), ("CHAN_TYP", "U2"), ("CHAN_NAM", "Cn"),
+    ("PHY_NAM", "Cn"), ("LOG_NAM", "Cn"), ("HEAD_NUM", "U1"), ("SITE_NUM", "U1"),
 ))
 SDR = RecordSpec("SDR", 1, 80, (
     ("HEAD_NUM", "U1"), ("SITE_GRP", "U1"), ("SITE_CNT", "U1"), ("SITE_NUM", "k2U1"),
@@ -114,7 +137,7 @@ TSR = RecordSpec("TSR", 10, 30, (
 ))
 
 RECORDS: dict[str, RecordSpec] = {
-    spec.name: spec for spec in (FAR, ATR, MIR, MRR, PCR, HBR, SBR, SDR, WIR,
+    spec.name: spec for spec in (FAR, ATR, MIR, MRR, PCR, HBR, SBR, PMR, SDR, WIR,
                                  WRR, WCR, PIR, PRR, PTR, FTR, TSR)
 }
 _BY_KEY: dict[tuple[int, int], RecordSpec] = {(spec.typ, spec.sub): spec for spec in RECORDS.values()}
@@ -162,25 +185,26 @@ def _bn(value: Any) -> bytes:
     return bytes([len(raw)]) + raw
 
 
-def encode_dn(bit_positions: Sequence[int], width: int) -> bytes:
+def encode_dn(bit_positions: Sequence[int], width: int, endian: str = "little") -> bytes:
     """Encode a ``Dn`` bit field (STDF bit count + packed bits)."""
-    if not bit_positions:
-        return b"\x00"
-    nbytes = (max(max(bit_positions) + 1, width) + 7) // 8
+    bits = max(max(bit_positions, default=-1) + 1, width)
+    if bits < 0 or bits > 65535 or any(position < 0 for position in bit_positions):
+        raise ValueError("Dn requires 0..65535 bits and nonnegative bit positions")
+    nbytes = (bits + 7) // 8
     payload = bytearray(nbytes)
     for position in bit_positions:
         payload[position // 8] |= 1 << (position % 8)
-    return bytes([nbytes * 8]) + bytes(payload)
+    return struct.pack(normalize_endian(endian) + "H", bits) + bytes(payload)
 
 
-def _dn(value: Any) -> bytes:
+def _dn(value: Any, endian: str) -> bytes:
     """Encode ``Dn`` from ``bytes`` or ``(bit_positions, width)``."""
     if value is None:
-        return b"\x00"
+        return b"\x00\x00"
     if isinstance(value, bytes):
-        return bytes([len(value) * 8]) + value
+        return struct.pack(normalize_endian(endian) + "H", len(value) * 8) + value
     positions, width = value
-    return encode_dn(positions, width)
+    return encode_dn(positions, width, endian)
 
 
 def split_k(stdf_type: str) -> tuple[int, str]:
@@ -229,7 +253,7 @@ def _encode_field(stdf_type: str, value: Any, endian: str) -> bytes:
     if stdf_type == "Bn":
         return _bn(value)
     if stdf_type == "Dn":
-        return _dn(value)
+        return _dn(value, endian)
     if stdf_type.startswith("k"):
         return _array(stdf_type, value, endian)
     fmt = (_PACK if normalize_endian(endian) == "<" else _PACK_BE).get(stdf_type)
@@ -267,13 +291,19 @@ def _decode_cn(buffer: bytes, offset: int) -> tuple[str, int]:
     return buffer[start:start + length].decode("ascii", errors="replace"), start + length
 
 
-def decode_record(buffer: bytes, offset: int = 0) -> tuple[dict[str, Any], int, str]:
+def decode_record(buffer: bytes, offset: int = 0, *, endian: str | None = None) -> tuple[dict[str, Any], int, str]:
     """Decode one record from ``buffer``; returns ``(values, next_offset, name)``."""
     if offset + 4 > len(buffer):
         raise ValueError("truncated record header")
-    length, typ, sub = struct.unpack_from("<HBB", buffer, offset)
+    order = normalize_endian(endian) if endian else (
+        ">" if len(buffer) >= 6 and buffer[2:4] == b"\x00\x0a" and buffer[4] == 1 else "<"
+    )
+    formats = _PACK if order == "<" else _PACK_BE
+    length, typ, sub = struct.unpack_from(order + "HBB", buffer, offset)
     body_start = offset + 4
     body = buffer[body_start:body_start + length]
+    if len(body) != length:
+        raise ValueError("truncated record body")
     spec = _BY_KEY.get((typ, sub))
     name = spec.name if spec else f"UNKNOWN({typ},{sub})"
     values: dict[str, Any] = {}
@@ -298,10 +328,10 @@ def decode_record(buffer: bytes, offset: int = 0) -> tuple[dict[str, Any], int, 
                 values[field_name] = body[pos + 1:pos + 1 + count]
                 pos += 1 + count
             elif stdf_type == "Dn":
-                bits = body[pos]
+                bits = struct.unpack_from(order + "H", body, pos)[0]
                 count = (bits + 7) // 8
-                values[field_name] = body[pos + 1:pos + 1 + count]
-                pos += 1 + count
+                values[field_name] = body[pos + 2:pos + 2 + count]
+                pos += 2 + count
             elif stdf_type.startswith("k"):
                 index, element = split_k(stdf_type)
                 count = int(values.get(spec.fields[index][0]) or 0)
@@ -312,7 +342,7 @@ def decode_record(buffer: bytes, offset: int = 0) -> tuple[dict[str, Any], int, 
                         (raw[i // 2] >> (4 * (i % 2))) & 0x0F for i in range(count)
                     ]
                 else:
-                    fmt = _PACK.get(element)
+                    fmt = formats.get(element)
                     if fmt is None:
                         raise ValueError(f"unsupported array type '{stdf_type}'")
                     size = struct.calcsize(fmt)
@@ -321,7 +351,7 @@ def decode_record(buffer: bytes, offset: int = 0) -> tuple[dict[str, Any], int, 
                     ]
                     pos += count * size
             else:
-                fmt = _PACK.get(stdf_type)
+                fmt = formats.get(stdf_type)
                 if fmt is None:
                     raise ValueError(f"unsupported type '{stdf_type}'")
                 size = struct.calcsize(fmt)
@@ -329,6 +359,8 @@ def decode_record(buffer: bytes, offset: int = 0) -> tuple[dict[str, Any], int, 
                 pos += size
         except (IndexError, struct.error) as exc:
             raise ValueError(f"{name}.{field_name}: truncated field ({exc})") from exc
+    if pos > len(body):
+        raise ValueError(f"{name}: truncated field payload")
     return values, body_start + length, name
 
 
@@ -338,3 +370,5 @@ def iter_records(buffer: bytes) -> Iterable[tuple[str, dict[str, Any]]]:
     while offset + 4 <= len(buffer):
         values, offset, name = decode_record(buffer, offset)
         yield name, values
+    if offset != len(buffer):
+        raise ValueError("trailing bytes after last STDF record")

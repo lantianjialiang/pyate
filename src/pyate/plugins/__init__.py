@@ -18,9 +18,9 @@ from .scaffold import create_plugin
 __all__ = [
     "API_VERSION",
     "ENV_PLUGIN_PATH",
+    "PROJECT_NAME",
     "HookBridge",
     "HookPolicy",
-    "PROJECT_NAME",
     "PluginManager",
     "PluginRegistry",
     "PyateSpec",

@@ -24,16 +24,15 @@
 所以 UPH 是估算值而不是实测墙钟值。这样 1 万 die 的批次能在秒级跑完。
 
 ## D6 retest 复用同一个 DUT 种子
-重测是“同一颗物理器件再测一次”，因此重测时用**相同 seed/坐标**重建 DUT：
-缺陷集合不变，只有接触条件（contact_fail）变化。若换种子，等于换了一颗芯片，
-yield 不会随重测提升（实现过程中验证过这一点）。E2E-FT 因此从 85 % → 95 %。
+重测使用同一 `PhysicalPartId` 和 `DUTInstanceSpec`。工艺、固有缺陷与量测随机流独立，
+缺陷采样不依赖共享随机数游标；跨 stage 传递同一 population，接触失败重测改变接触条件。
 
 ## D7 重测的 STDF 语义
-被覆盖的旧尝试以独立的 `PIR → PTR/FTR → PRR` 写入，`PART_FLG |= 0x04`（retest bit），
-最终结果再写一组并同样带 retest bit；这样回读能看到完整测试历史，
-`PCR/HBR/SBR` 计数与 PRR 数保持一致（校验器交叉核对）。
+每次尝试以独立的 `PIR → PTR/FTR → PRR` 写入。后续尝试设置 `PART_FLG` bit 0，
+表示按 PART_ID 覆盖此前记录；首测不设置覆盖位。保留完整历史并分别报告尝试与最终结果。
 
-`PART_FLG` 取值：`0`=pass、`0x01`=not tested、`0x02`=fail、`0x04`=retest、`0x08`=abnormal。
+`PART_FLG`：`0x01`=按 PART_ID 覆盖、`0x02`=按 XY 覆盖、`0x04`=异常结束、
+`0x08`=fail、`0x10`=pass/fail 无效。`TEST_FLG` 的失败位是 `0x80`。
 
 ## D8 STDF 数组字段（`k<n><type>`）不带长度前缀
 `RTN_INDX = k12U2`，元素个数取自记录内第 12 个字段（`RTN_ICNT`），与 pystdf 的约定一致；
@@ -41,8 +40,8 @@ yield 不会随重测提升（实现过程中验证过这一点）。E2E-FT 因�
 `"little"` 与 `"<"` 混用导致的多字节字段大小端不一致（曾是真实 bug）。
 
 ## D9 `Dn` 位图字段
-`FAIL_PIN` 写为 STDF `Dn`：1 字节 bit 数 + 向上取整的字节。`encode_dn(positions, width)`
-决定最小宽度（至少 8 bit）。
+`FAIL_PIN` 写为 STDF `Dn`：2 字节无符号 bit 数（跟随文件字节序），再接向上取整的位图字节。
+PMR 从 1 开始编号，FAIL_PIN 的位号等于 PMR 索引；bit 0 保留。
 
 ## D10 Batch 的 sweep 轴是“任意配置点号路径”
 不限定轴必须是温度/DUT，`sweep: {run.temperature: [...], dut_profile.yield.pass: [...]}`
@@ -60,18 +59,19 @@ yield 不会随重测提升（实现过程中验证过这一点）。E2E-FT 因�
 
 ## D13 插件钩子失败策略
 `HookPolicy.WARN`（默认）/`IGNORE`/`ABORT`。默认只告警：一个坏插件不能让整跑崩掉；
-`FlowExecutor._call_hook` 另外再包一层 try/except，保证执行器自身安全。
+逐插件调度隔离失败；ABORT 通过专用异常传播到运行控制器，不被执行器转成普通 DUT 失败。
 
 ## D14 GUI 用 MVVM + 轮询节流
 `gui/viewmodels/*` 不 import Qt，可 headless 单测；Qt 层用 50 ms `QTimer` 读取
-viewmodel 的 `should_render()` 决定是否重绘（相当于 20 fps 上限），因此 10 万条
-`TEST_RESULT` 事件不会阻塞 UI。事件本身在 worker 线程产生，viewmodel 只做累加。
+viewmodel 的 `should_render()` 决定是否重绘（20 fps 上限，并非实测帧率）。
+事件在 worker 线程产生；viewmodel 更新、统计遍历和 Qt 渲染共享 RLock，避免并发修改容器。
+十万事件的实际 FPS、增量渲染和锁竞争仍需要专项验证。
 
 GUI 冒烟测试用 `QT_QPA_PLATFORM=offscreen` 直接构造窗口，未引入 `pytest-qt`
 （离线环境无法安装额外依赖）；测试内容等价于 pytest-qt 的 `qtbot` 冒烟。
 
 ## D15 温度只影响 limits 查找与 STDF 记录
-DUT 模型本身没有温度参数化（规格 04 未要求）。批量扫温度时若希望良率随温度变化，
+DUT 模型的温度物理响应尚未实现，属于规格 03/09 的待办。当前批量扫温度时若希望良率随温度变化，
 请同时扫 `dut_profile.yield.pass` / `process.*` 等参数（示例 batch 即如此）。
 
 ## D16 `run.only` / `run.skip` 是调试开关
@@ -80,8 +80,9 @@ DUT 模型本身没有温度参数化（规格 04 未要求）。批量扫温度
 直接结果，不做隐式依赖推导。
 
 ## D17 恢复（resume）以 touchdown 为粒度
-`out/<run>/resume.json` 记录 `unit_index` 与 `touchdowns_done`；die 级断点恢复代价
-大于收益（每 die 只有几十毫秒）。
+`results.sqlite3` 原子提交每个完成 touchdown 的结果和尝试历史，绑定配置与 pattern 指纹。
+恢复时重放已提交结果以重建汇总和输出，再运行未提交 touchdown；`resume.json` 是原子更新的辅助游标。
+STDF 先写 `.partial`，关闭后替换最终文件；Windows 短暂共享锁采用有界重试，永久失败继续向上传播。
 
 ## D18 跨阶段 lot 流转以「die 集合」传递 KGD
 `LotRunner` 只在 wafer 阶段（`CP*`）收集 KGD：把 `UnitSummary.bins` 里 pass bin 的 die 坐标

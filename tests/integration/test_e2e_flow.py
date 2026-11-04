@@ -7,10 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from conftest import CP_SESSION, FT_SESSION, small_cp_overrides
 from pyate.api import LotRunner, Session
 from pyate.datalog.stdf.reader_check import verify_stdf
-
-from conftest import CP_SESSION, FT_SESSION, small_cp_overrides
 
 FT_OVERRIDES = {
     "run.sites": 4,
@@ -33,14 +32,14 @@ def lot(tmp_path_factory):
 
 
 def test_all_three_stages_ran_in_order(lot) -> None:
-    report, output = lot
+    report, _output = lot
     assert [stage.stage for stage in report.stages] == ["CP1", "CP2", "FT1"]
     assert report.lot_id
     assert all(stage.summary.total_parts > 0 for stage in report.stages)
 
 
 def test_second_cp_stage_only_tests_known_good_dies(lot) -> None:
-    report, output = lot
+    report, _output = lot
     cp1, cp2, _ft = report.stages
     assert cp2.die_filter is not None
     assert len(cp2.die_filter) == cp1.passed
@@ -49,8 +48,8 @@ def test_second_cp_stage_only_tests_known_good_dies(lot) -> None:
 
 
 def test_ft_only_loads_known_good_parts(lot) -> None:
-    report, output = lot
-    cp1, cp2, ft = report.stages
+    report, _output = lot
+    _cp1, cp2, ft = report.stages
     assert ft.part_ids is not None
     assert len(ft.part_ids) == cp2.passed
     assert ft.tested == cp2.passed
@@ -58,12 +57,13 @@ def test_ft_only_loads_known_good_parts(lot) -> None:
 
 
 def test_cumulative_yield_matches_the_product_of_the_stages(lot) -> None:
-    report, output = lot
+    report, _output = lot
     expected = 100.0
     for stage in report.stages:
         expected *= stage.yield_pct / 100.0
     assert report.cumulative_yield() == pytest.approx(expected, abs=1e-6)
-    assert report.cumulative_yield() < min(stage.yield_pct for stage in report.stages)
+    # Stable known-good dies can legitimately pass subsequent stages at 100%.
+    assert report.cumulative_yield() <= min(stage.yield_pct for stage in report.stages)
 
 
 def test_each_stage_writes_its_own_artefacts(lot) -> None:
@@ -89,7 +89,7 @@ def test_lot_report_files_are_complete(lot) -> None:
 
 
 def test_stage_sessions_can_differ(lot) -> None:
-    report, output = lot
+    report, _output = lot
     cp1, _cp2, ft = report.stages
     assert Path(cp1.session).parent.name == "demo_cp"
     assert Path(ft.session).parent.name == "demo_ft"

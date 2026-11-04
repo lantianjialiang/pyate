@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-__all__ = ["create_plugin", "PLUGIN_TEMPLATE", "PYPROJECT_TEMPLATE"]
+__all__ = ["PLUGIN_TEMPLATE", "PYPROJECT_TEMPLATE", "create_plugin"]
 
 PLUGIN_TEMPLATE = '''"""{name}: a pyate plugin."""
 

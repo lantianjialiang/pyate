@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 
 from ..config.models import WaferConfig
 
@@ -54,7 +54,8 @@ class WaferMap:
     def die_center_mm(self, x: int, y: int) -> tuple[float, float]:
         """Physical centre of die ``(x, y)`` in millimetres."""
         die_w, die_h = self.config.die_size_mm
-        return (x * die_w, y * die_h)
+        cx, cy = self.config.center_die
+        return ((x - cx) * die_w, (y - cy) * die_h)
 
     def _generate(self) -> dict[tuple[int, int], WaferDie]:
         die_w, die_h = self.config.die_size_mm
@@ -101,9 +102,9 @@ class WaferMap:
         min_x, max_x, min_y, max_y = self._bounds
         coords: list[tuple[int, int]] = []
         for row, y in enumerate(range(min_y, max_y + 1)):
-            xs = range(min_x, max_x + 1)
+            xs = list(range(min_x, max_x + 1))
             if scan == "serpentine" and row % 2 == 1:
-                xs = reversed(list(xs))
+                xs.reverse()
             for x in xs:
                 if (x, y) in self.dies:
                     coords.append((x, y))

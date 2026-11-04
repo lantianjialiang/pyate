@@ -36,3 +36,6 @@
 - [阶段 14] 质量门槛 — 环境离线无法安装 ruff/mypy/pytest-cov（`pip` 无可用索引），改用标准库 `trace` 自建 `tools/coverage_std.py` 统计 `src/pyate` 行覆盖率，并把原始计数缓存成 JSON 以便复用
 - [阶段 12] GUI 视觉打磨 — 新增 `gui.panels._fmt_num`（长小数收敛到 4 位、微量级走科学计数、None 显示 `-`），datalog/limits/batch 三张表统一右对齐 + 隐藏行号列；配置树把 `key: value` 拆成两列（长路径不再被截断）；`RunPanel` 统计栏补 `unit:` 并把误用为 bins 的 `uph` 标签改名成 `bins`；`PatternPanel` 换成 `QGroupBox + QFormLayout`（字段等高、按钮右对齐）；`theme` 重写页签/菜单/分组框/滚动条/分隔条样式 — `tests/gui/test_gui_smoke.py`（23 例，新增 `_fmt_num` 与配置树 value 列断言）
 - [阶段 12] 新增 `tools/shoot_gui.py` — 离屏渲染真实 `MainWindow`（可选跑一片 wafer 填充 wafer map），产出 `docs/images/gui_*.png` 与浅色主题版本，README 的「界面」章节直接引用这些图
+- [2026-11-04 Review 修复] B00/B01/B02/B04/B05/B06/B07/B08/B09/B12/B13 等核心路径已实施：修复示例、判定、限值、STDF、DUT 身份、SQLite 恢复及批量状态；部分任务尚有边界验收，详见 docs/IMPLEMENTATION_PROGRESS.md。
+- [2026-11-04 验证] 核心 strict mypy 51 文件无错误；HAL/恢复/插件/GUI 定向回归 84 项通过；收紧后的 PRR 时间及 TSR 统计可复现测试 5 项通过；正式全量结果另行记录。
+- [2026-11-04 最终回归] 本批修复全量 pytest（含离屏 GUI）347 项通过，耗时 384.14 秒；core strict mypy 51 文件无错误。未完成的 breakdown 验收项保留在 docs/IMPLEMENTATION_PROGRESS.md。

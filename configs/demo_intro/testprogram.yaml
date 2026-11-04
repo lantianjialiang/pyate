@@ -16,6 +16,7 @@ flows:
       pattern: cnt_basic.pat
       max_cycles: 64
       fail_code: 6
+      completion_mode: window
     on_fail:
       action: continue
       bin: 6

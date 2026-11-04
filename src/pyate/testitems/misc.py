@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any, cast
 
 from ..engine.context import SiteContext
 from ..hal.base import HALBackend
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["DelayParams", "DelayItem", "UserCodeParams", "UserCodeItem"]
+__all__ = ["DelayItem", "DelayParams", "UserCodeItem", "UserCodeParams"]
 
 
 class DelayParams(TestItemParams):
@@ -71,4 +72,4 @@ class UserCodeItem(TestItem):
         func = getattr(module, attribute, None)
         if not callable(func):
             raise ValueError(f"'{path}' is not callable")
-        return func
+        return cast(Callable[..., Any], func)

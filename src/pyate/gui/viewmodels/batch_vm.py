@@ -43,7 +43,7 @@ class BatchViewModel:
         """Parse ``batch.yaml`` and return the expanded job list."""
         try:
             self.spec, self.jobs = load_batch(path)
-        except Exception as exc:  # noqa: BLE001 - surfaced in the UI
+        except Exception as exc:
             self.spec, self.jobs = None, []
             self.error = str(exc)
             self.rows = []

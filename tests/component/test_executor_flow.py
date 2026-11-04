@@ -6,6 +6,7 @@ import threading
 
 import pytest
 
+from conftest import CONFIGS
 from pyate.config.loader import load_session
 from pyate.config.models import FlowNode
 from pyate.dut.base import Defect
@@ -19,8 +20,6 @@ from pyate.engine.flow import ExpressionError, SafeExpression, evaluate_branch, 
 from pyate.hal.simulated import SimulatedHAL
 from pyate.pattern.parser import load_pattern
 from pyate.testitems.base import LimitsTable
-
-from conftest import CONFIGS
 
 SESSION = CONFIGS / "demo_cp"
 
@@ -63,7 +62,7 @@ PASS_FLOW = [
 
 # ----------------------------------------------------------------- basic flow
 def test_flow_runs_every_item_and_bins_the_part(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     executor = _executor(session, hal, PASS_FLOW)
     part = executor.run_part(ctx)
     assert [result.test_num for result in part.results] == [1000, 1001, 2000]
@@ -73,7 +72,7 @@ def test_flow_runs_every_item_and_bins_the_part(rig) -> None:
 
 
 def test_limits_from_csv_are_applied(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     executor = _executor(session, hal, [PASS_FLOW[1]])
     part = executor.run_part(ctx)
     result = part.results[0]
@@ -108,7 +107,7 @@ def test_fail_with_continue_action_keeps_going(rig) -> None:
 
 
 def test_disabled_node_is_skipped(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     executor = _executor(session, hal, [
         _node(item="idd_static", test_num=2000, enabled=False),
         _node(item="delay_ms", test_num=4000, params={"ms": 0.1}),
@@ -118,7 +117,7 @@ def test_disabled_node_is_skipped(rig) -> None:
 
 
 def test_groups_are_expanded(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     nodes = [_node(group="params", items=[
         _node(item="idd_static", test_num=2000),
         _node(item="delay_ms", test_num=4000, params={"ms": 0.1}),
@@ -129,7 +128,7 @@ def test_groups_are_expanded(rig) -> None:
 
 
 def test_only_and_skip_filter_items(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     only = _executor(session, hal, PASS_FLOW, only=["idd_static"])
     part = only.run_part(ctx)
     assert [result.test_num for result in part.results] == [2000]
@@ -141,7 +140,7 @@ def test_only_and_skip_filter_items(rig) -> None:
 
 
 def test_empty_flow_still_bins_the_part(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     part = _executor(session, hal, []).run_part(ctx)
     assert part.results == []
     assert part.passed
@@ -149,7 +148,7 @@ def test_empty_flow_still_bins_the_part(rig) -> None:
 
 # ------------------------------------------------------------------- branches
 def test_branch_executes_the_matching_arm(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     nodes = [
         _node(item="idd_static", test_num=2000),
         _node(branch={
@@ -164,7 +163,7 @@ def test_branch_executes_the_matching_arm(rig) -> None:
 
 
 def test_branch_else_arm_runs_when_the_condition_is_false(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     nodes = [
         _node(item="idd_static", test_num=2000, params={"hi": 1e-9},
               on_fail={"action": "continue"}),
@@ -180,7 +179,7 @@ def test_branch_else_arm_runs_when_the_condition_is_false(rig) -> None:
 
 
 def test_loop_repeats_the_body(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     nodes = [_node(loop={"count": 3, "items": [
         {"item": "delay_ms", "test_num": 4000, "params": {"ms": 0.1}},
     ]})]
@@ -189,7 +188,7 @@ def test_loop_repeats_the_body(rig) -> None:
 
 
 def test_goto_bin_forces_the_soft_bin(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     nodes = [
         _node(item="idd_static", test_num=2000),
         _node(goto_bin=7),
@@ -209,7 +208,7 @@ def test_iter_flow_items_flattens_groups_and_loops() -> None:
 
 
 def test_safe_expression_supports_variables_and_comparisons(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, _dut, ctx = rig
     ctx.vars["limit"] = 3
     ctx.add_result(Measurement(test_num=2000, test_name="idd_static", site=1, value=1e-4))
     assert SafeExpression('var("limit") > 2').evaluate(ctx) is True
@@ -221,7 +220,7 @@ def test_safe_expression_supports_variables_and_comparisons(rig) -> None:
 
 
 def test_safe_expression_rejects_dangerous_code(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, _dut, ctx = rig
     for source in ("__import__('os').system('echo hi')", "open('/etc/passwd')",
                    "[x for x in range(3)]", "lambda: 1"):
         with pytest.raises(ExpressionError):
@@ -229,14 +228,14 @@ def test_safe_expression_rejects_dangerous_code(rig) -> None:
 
 
 def test_safe_expression_reports_unknown_name(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, _dut, ctx = rig
     with pytest.raises(ExpressionError):
         SafeExpression("no_such_variable").evaluate(ctx)
 
 
 # --------------------------------------------------------------------- events
 def test_executor_publishes_item_and_part_events(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     events = EventBus()
     seen: list[EventKind] = []
     events.subscribe("*", lambda event: seen.append(event.kind))
@@ -247,7 +246,7 @@ def test_executor_publishes_item_and_part_events(rig) -> None:
 
 
 def test_result_event_carries_the_measurement(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     events = EventBus()
     payloads: list[dict] = []
     events.subscribe(EventKind.TEST_RESULT,
@@ -261,7 +260,7 @@ def test_result_event_carries_the_measurement(rig) -> None:
 
 # ------------------------------------------------------------- run control
 def test_stop_event_aborts_the_flow(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     stop = threading.Event()
     stop.set()
     executor = _executor(session, hal, PASS_FLOW, stop_event=stop)
@@ -270,7 +269,7 @@ def test_stop_event_aborts_the_flow(rig) -> None:
 
 
 def test_on_item_done_callback_receives_results(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     collected: list[int] = []
     executor = _executor(session, hal, PASS_FLOW[1:],
                          on_item_done=lambda _ctx, _item, results:
@@ -280,7 +279,7 @@ def test_on_item_done_callback_receives_results(rig) -> None:
 
 
 def test_contact_fail_is_recorded_as_a_part_issue(rig) -> None:
-    session, hal, dut, ctx = rig
+    session, hal, _dut, ctx = rig
     ctx.extra["contact_fail"] = True
     part = _executor(session, hal, PASS_FLOW[1:]).run_part(ctx)
     assert not part.passed

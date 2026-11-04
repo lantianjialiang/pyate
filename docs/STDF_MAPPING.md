@@ -53,17 +53,18 @@ MRR
 | PRR | `NUM_TEST` | 该 part 实际写入的 PTR+FTR 个数 |
 | PRR | `PART_ID` | CP：`<wafer>-X<x>Y<y>`；FT：`<lot>-T<tray>-P<n>` |
 | PRR | `PART_TXT` | 第一个失败项的描述（最多 64 字符） |
-| PRR | `TEST_T` | 该 part 的测试耗时（秒，**取整**） |
+| PRR | `TEST_T` | 该次尝试的模型测试耗时（毫秒，取整） |
 | PRR | `PART_FLG` | 见下 |
 
 `PART_FLG` 位：
 
 | 位 | 含义 | 何时置位 |
 |---|---|---|
-| 0x01 | not tested | `part.skipped`（site 禁用、prober 跳过该 die） |
-| 0x02 | fail | 非 pass bin |
-| 0x04 | retest | `part.retest`（重测产生的 PRR） |
-| 0x08 | abnormal | part 上带 `error`（site 崩溃、仪器异常） |
+| 0x01 | supersede by PART_ID | 后续重测尝试 |
+| 0x02 | supersede by XY | 按坐标覆盖（当前 writer 使用 PART_ID） |
+| 0x04 | abnormal | part 上带 `error` |
+| 0x08 | fail | 非 pass bin |
+| 0x10 | no pass/fail indication | 未执行测试 |
 
 ## 每个测试项
 
@@ -120,7 +121,6 @@ MRR
 | ATR | `MOD_TIM` |
 | WIR | `START_T` |
 | WRR | `FINISH_T` |
-| PRR | `TEST_T` |
 | MRR | `FINISH_T` |
 
 `tests/integration/test_reproducibility.py` 就是按这张表剔字段后逐记录比较的：

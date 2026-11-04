@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from ..config.models import FlowNode
 from ..hal.base import HALBackend, HALError
+from ..plugins.loader import PluginAbort
 from ..testitems.base import LimitsTable, TestItem
 from ..testitems.registry import create_testitem
 from .binning import BinningEngine
@@ -16,7 +18,7 @@ from .context import PartResult, RunContext, SiteContext, TestResult
 from .events import EventBus, EventKind
 from .flow import ExpressionError, SafeExpression
 
-__all__ = ["HAL_FAIL_CODE", "RunAborted", "FlowExecutor"]
+__all__ = ["HAL_FAIL_CODE", "FlowExecutor", "RunAborted"]
 
 _LOG = logging.getLogger("pyate.executor")
 HAL_FAIL_CODE = 99
@@ -119,7 +121,10 @@ class FlowExecutor:
             retest=ctx.retest,
             skipped=ctx.skipped,
             results=list(ctx.results),
-            extra={"stage": self.stage, "temperature": self.temperature},
+            extra={"stage": self.stage, "temperature": self.temperature,
+                   "revision": ctx.extra.get("program_revision", ""),
+                   "physical_instance": ctx.extra.get("physical_instance"),
+                   "retest_requested": ctx.vars.get("retest_requested", 0)},
         )
         payload = part.to_dict()
         first_fail = next((row for row in ctx.results if not row.passed and not row.skipped), None)
@@ -157,7 +162,14 @@ class FlowExecutor:
                 except ExpressionError as exc:
                     self._publish(EventKind.ERROR, site=ctx.site_id, error=str(exc))
                     take_then = False
-                forced = self._run_nodes(node.branch.then if take_then else node.branch.else_, ctx)
+                if take_then:
+                    forced = self._run_nodes(node.branch.then, ctx)
+                    if forced is not None or ctx.stopped:
+                        return forced
+                    self._sync_masked_nodes(node.branch.else_)
+                else:
+                    self._sync_masked_nodes(node.branch.then)
+                    forced = self._run_nodes(node.branch.else_, ctx)
                 if forced is not None:
                     return forced
             elif kind == "loop":
@@ -173,6 +185,32 @@ class FlowExecutor:
                 ctx.vars["forced_bin"] = int(node.goto_bin or 0)
                 return int(node.goto_bin or 0)
         return ctx.vars.get("forced_bin")
+
+    def _sync_masked_nodes(self, nodes: list[FlowNode]) -> None:
+        """Visit synchronization slots in a branch this site did not select.
+
+        Every active site traverses the same static item phases; masked phases
+        consume no DUT operations, results or modeled test time.
+        """
+        if not self._barrier_active:
+            return
+        for node in nodes:
+            if not node.enabled:
+                continue
+            if node.item is not None:
+                name = str(node.item)
+                if (self.only and name not in self.only) or name in self.skip:
+                    continue
+                self._check_abort()
+                self.barrier.wait()
+            elif node.branch is not None:
+                self._sync_masked_nodes(node.branch.then)
+                self._sync_masked_nodes(node.branch.else_)
+            elif node.loop is not None:
+                for _ in range(node.loop.count):
+                    self._sync_masked_nodes(node.loop.items)
+            else:
+                self._sync_masked_nodes(node.items)
 
     def _run_item(self, node: FlowNode, ctx: SiteContext) -> int | None:
         name = str(node.item)
@@ -207,7 +245,7 @@ class FlowExecutor:
             self._call_hook("before_item", ctx=ctx, item=item)
             item.setup(ctx, self.hal)
             results = list(item.execute(ctx, self.hal))
-        except RunAborted:
+        except (RunAborted, PluginAbort):
             raise
         except HALError as exc:
             result = TestResult(
@@ -216,7 +254,7 @@ class FlowExecutor:
             )
             results = [result]
             self._publish(EventKind.ERROR, site=ctx.site_id, item=name, error=str(exc))
-        except Exception as exc:  # noqa: BLE001 - a broken item must not kill the run
+        except Exception as exc:
             self._log.exception("item %s crashed", name)
             result = TestResult(
                 test_num=test_num, test_name=name, site=ctx.site_id, value=None,
@@ -228,7 +266,7 @@ class FlowExecutor:
             if item is not None:
                 try:
                     item.cleanup(ctx, self.hal)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     self._log.warning("cleanup failed for %s", name, exc_info=True)
 
         if not results:
@@ -255,6 +293,11 @@ class FlowExecutor:
         self._call_hook("on_fail", ctx=ctx, item=item, results=failed)
         action = node.on_fail.action if node.on_fail else "continue"
         bin_override = node.on_fail.bin if node.on_fail else None
+        if action == "retest":
+            assert node.on_fail is not None
+            ctx.vars["retest_requested"] = node.on_fail.max_retries
+            ctx.stopped = True
+            self._leave_barrier()
         if action == "stop":
             ctx.stopped = True
             self._leave_barrier()
@@ -291,7 +334,7 @@ class FlowExecutor:
             return
         limit = self.limits.lookup(result.test_num, self.stage, self.temperature)
         if limit is not None:
-            result.judge(limit.lo, limit.hi)
+            result.judge(*limit.physical_bounds())
             if limit.unit:
                 result.unit = limit.unit
         else:
@@ -334,7 +377,4 @@ class FlowExecutor:
         func = getattr(self.hooks, name, None)
         if func is None:
             return
-        try:
-            func(**kwargs)
-        except Exception:  # noqa: BLE001 - plugin failures are isolated
-            self._log.warning("plugin hook %s failed", name, exc_info=True)
+        func(**kwargs)  # the plugin manager applies WARN/IGNORE/ABORT policy

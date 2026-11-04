@@ -33,7 +33,7 @@ def adc_run(tmp_path_factory):
 
 
 def test_plugin_registers_model_and_items(adc_run) -> None:
-    manager, summary, output = adc_run
+    manager, _summary, _output = adc_run
     assert is_registered("adc")
     assert item_registered("adc_inl_dnl")
     assert item_registered("adc_offset_gain")
@@ -41,7 +41,7 @@ def test_plugin_registers_model_and_items(adc_run) -> None:
 
 
 def test_adc_lot_runs_to_completion(adc_run) -> None:
-    manager, summary, output = adc_run
+    _manager, summary, _output = adc_run
     assert summary.stage == "EXT1"
     assert summary.total_parts == 20
     assert summary.total_tested == 20
@@ -49,7 +49,7 @@ def test_adc_lot_runs_to_completion(adc_run) -> None:
 
 
 def test_plugin_items_appear_in_the_stdf(adc_run) -> None:
-    manager, summary, output = adc_run
+    _manager, _summary, output = adc_run
     stdf = sorted(output.glob("*.stdf"))[0]
     from pyate.datalog.stdf.records import iter_records
 
@@ -60,14 +60,14 @@ def test_plugin_items_appear_in_the_stdf(adc_run) -> None:
 
 
 def test_adc_stdf_is_structurally_valid(adc_run) -> None:
-    manager, summary, output = adc_run
+    _manager, summary, output = adc_run
     report = verify_stdf(sorted(output.glob("*.stdf"))[0])
     assert report.ok, report.errors[:3]
     assert report.parts == summary.total_parts
 
 
 def test_adc_measurements_are_physically_plausible(adc_run) -> None:
-    manager, summary, output = adc_run
+    _manager, _summary, output = adc_run
     from pyate.datalog.stdf.records import iter_records
 
     values = [

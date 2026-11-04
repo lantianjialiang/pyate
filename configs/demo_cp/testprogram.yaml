@@ -101,6 +101,7 @@ flows:
         pattern: cnt_loop.pat
         max_cycles: 64
         fail_code: 6
+        completion_mode: window
       on_fail:
         action: continue
         bin: null
@@ -167,11 +168,10 @@ flows:
     branch: null
     loop: null
     goto_bin: null
-  - item: functional
-    test_num: 3000
+  - item: idd_static
+    test_num: 2000
     params:
-      pattern: cnt_basic.pat
-      fail_code: 6
+      fail_code: 4
     on_fail:
       action: continue
       bin: null
@@ -182,10 +182,11 @@ flows:
     branch: null
     loop: null
     goto_bin: null
-  - item: idd_static
-    test_num: 2000
+  - item: functional
+    test_num: 3000
     params:
-      fail_code: 4
+      pattern: cnt_basic.pat
+      fail_code: 6
     on_fail:
       action: continue
       bin: null

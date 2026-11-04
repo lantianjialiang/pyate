@@ -7,6 +7,7 @@ instrument driver means implementing :class:`HALBackend` again.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -17,8 +18,15 @@ if TYPE_CHECKING:  # pragma: no cover
     from .pmu import PMU
     from .relay import Relay
 
-__all__ = ["HALError", "NotConnected", "OverCurrent", "ResourceConflict",
-           "SelfCheckError", "SiteResources", "HALBackend"]
+__all__ = [
+    "HALBackend",
+    "HALError",
+    "NotConnected",
+    "OverCurrent",
+    "ResourceConflict",
+    "SelfCheckError",
+    "SiteResources",
+]
 
 
 class HALError(Exception):
@@ -57,25 +65,35 @@ class SiteResources:
     """All instruments belonging to one site."""
 
     site_id: int
-    dps: "DPS"
-    pmu: "PMU"
-    relay: "Relay"
-    digital: "DigitalChannel"
+    dps: DPS
+    pmu: PMU
+    relay: Relay
+    digital: DigitalChannel
 
-    def dut(self) -> "DUTModel | None":
+    def dut(self) -> DUTModel | None:
         """DUT bound to the digital channel (may be ``None`` before binding)."""
         return getattr(self.digital, "dut", None)
 
 
 class HALBackend(ABC):
     """Aggregate tester interface."""
+    cancel_check: Callable[[], None] | None = None
+
+    def add_time(self, site_id: int, milliseconds: float) -> None:
+        """Account for a modeled delay; real backends may use their own clock."""
+        if self.cancel_check is not None:
+            self.cancel_check()
+
+    def dut(self, site_id: int) -> DUTModel | None:
+        """Behavioral DUT capability when available."""
+        return self.site(site_id).dut()
 
     @abstractmethod
     def site(self, site_id: int) -> SiteResources:
         """Return the resources of ``site_id`` (1-based)."""
 
     @abstractmethod
-    def bind_dut(self, site_id: int, dut: "DUTModel") -> None:
+    def bind_dut(self, site_id: int, dut: DUTModel) -> None:
         """Attach a DUT instance to a site."""
 
     @abstractmethod

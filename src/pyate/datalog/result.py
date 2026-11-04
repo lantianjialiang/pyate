@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import Iterable
+from collections.abc import Iterable
+from dataclasses import dataclass
 
-__all__ = ["Capability", "capability", "bin_pareto", "histogram", "CpkAccumulator"]
+__all__ = ["Capability", "CpkAccumulator", "bin_pareto", "capability", "histogram"]
 
 
 @dataclass
@@ -22,6 +22,10 @@ class Capability:
     maximum: float = 0.0
     lo: float | None = None
     hi: float | None = None
+    unit: str = ""
+    stage: str = ""
+    temperature: float | None = None
+    revision: str = ""
 
     @property
     def cp(self) -> float:
@@ -54,33 +58,44 @@ class Capability:
             "max": self.maximum,
             "lo": self.lo,
             "hi": self.hi,
-            "cp": round(self.cp, 4),
-            "cpk": round(self.cpk, 4),
+            "unit": self.unit, "stage": self.stage,
+            "temperature": self.temperature, "revision": self.revision,
+            "cp": round(self.cp, 4) if self.count > 1 and self.sigma > 0 and self.lo is not None and self.hi is not None else None,
+            "cpk": round(self.cpk, 4) if self.count > 1 and self.sigma > 0 and (self.lo is not None or self.hi is not None) else None,
         }
 
 
 class CpkAccumulator:
-    """Collects values per test number to compute capability at the end."""
+    """Welford moments; storage grows with comparable groups, never sample count."""
 
     def __init__(self) -> None:
-        self._values: dict[int, list[float]] = {}
-        self._meta: dict[int, tuple[str, float | None, float | None]] = {}
+        self._groups: dict[tuple[int, str, float | None, float | None, str, str, float | None, str], tuple[Capability, float]] = {}
 
     def add(self, test_num: int, value: float | None, name: str = "",
-            lo: float | None = None, hi: float | None = None) -> None:
+            lo: float | None = None, hi: float | None = None, *, unit: str = "",
+            stage: str = "", temperature: float | None = None, revision: str = "") -> None:
         """Record one measurement."""
-        if value is None:
+        if value is None or not math.isfinite(value):
             return
-        self._values.setdefault(test_num, []).append(float(value))
-        self._meta[test_num] = (name, lo, hi)
+        key = (test_num, name, lo, hi, unit, stage, temperature, revision)
+        if key not in self._groups:
+            self._groups[key] = (Capability(test_num, name=name, lo=lo, hi=hi,
+                                            minimum=value, maximum=value, unit=unit,
+                                            stage=stage, temperature=temperature, revision=revision), 0.0)
+        moment, m2 = self._groups[key]
+        moment.count += 1
+        delta = value - moment.mean
+        moment.mean += delta / moment.count
+        m2 += delta * (value - moment.mean)
+        moment.minimum = min(moment.minimum, value)
+        moment.maximum = max(moment.maximum, value)
+        moment.sigma = math.sqrt(max(0.0, m2) / (moment.count - 1)) if moment.count > 1 else 0.0
+        self._groups[key] = moment, m2
 
     def report(self) -> list[Capability]:
         """Compute capability for every collected test."""
-        out: list[Capability] = []
-        for test_num, values in sorted(self._values.items()):
-            name, lo, hi = self._meta.get(test_num, ("", None, None))
-            out.append(capability(test_num, values, lo=lo, hi=hi, name=name))
-        return out
+        from dataclasses import replace
+        return [replace(moment) for _, (moment, _m2) in sorted(self._groups.items(), key=lambda item: repr(item[0]))]
 
 
 def capability(test_num: int, values: Iterable[float], *,

@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Union
+from typing import Any, Union
 
 __all__ = [
-    "Vector", "VectorOp", "JumpOp", "LoopStartOp", "LoopEndOp", "HaltOp", "LabelOp",
-    "Instruction", "Pattern", "FailCycle", "PatternResult", "ParseError",
+    "FailCycle",
+    "HaltOp",
+    "Instruction",
+    "JumpOp",
+    "LabelOp",
+    "LoopEndOp",
+    "LoopStartOp",
+    "ParseError",
+    "Pattern",
+    "PatternResult",
+    "Vector",
+    "VectorOp",
 ]
 
 
@@ -101,6 +112,7 @@ class Pattern:
     levels: str | None = None
     source: str | None = None
     includes: list[str] = field(default_factory=list)
+    capture_pins: list[str] = field(default_factory=list)
 
     def header(self) -> dict[str, Any]:
         """Parsed header, used by the config validator."""
@@ -109,6 +121,7 @@ class Pattern:
             "pins": list(self.pins),
             "timing": self.timing,
             "levels": self.levels,
+            "capture_pins": list(self.capture_pins),
         }
 
     @property
@@ -153,6 +166,8 @@ class PatternResult:
     """Outcome of a pattern run."""
 
     passed: bool = True
+    completed: bool = True
+    status: str = "completed"
     cycles: int = 0
     fail_count: int = 0
     first_fail_cycle: int | None = None
@@ -174,6 +189,8 @@ class PatternResult:
         """JSON-friendly summary."""
         return {
             "passed": self.passed,
+            "completed": self.completed,
+            "status": self.status,
             "cycles": self.cycles,
             "fail_count": self.fail_count,
             "first_fail_cycle": self.first_fail_cycle,

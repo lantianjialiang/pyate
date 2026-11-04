@@ -20,7 +20,10 @@ def collect_capability(parts: list[PartResult]) -> list[Capability]:
             if result.kind != "PTR" or result.skipped:
                 continue
             acc.add(result.test_num, result.value, result.test_name,
-                    result.lo_limit, result.hi_limit)
+                    result.lo_limit, result.hi_limit, unit=result.unit,
+                    stage=str(part.extra.get("stage", "")),
+                    temperature=part.extra.get("temperature"),
+                    revision=str(part.extra.get("revision", "")))
     return acc.report()
 
 
@@ -64,7 +67,10 @@ class StatsSink:
             if result.kind != "PTR" or result.skipped:
                 continue
             self.acc.add(result.test_num, result.value, result.test_name,
-                         result.lo_limit, result.hi_limit)
+                         result.lo_limit, result.hi_limit, unit=result.unit,
+                         stage=str(part.extra.get("stage", "")),
+                         temperature=part.extra.get("temperature"),
+                         revision=str(part.extra.get("revision", "")))
 
     def on_run_end(self, summary: Any) -> None:
         """Write the JSON report (when a path was given)."""

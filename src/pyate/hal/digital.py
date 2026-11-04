@@ -16,18 +16,20 @@ __all__ = ["DigitalChannel"]
 class DigitalChannel(ABC):
     """One site's digital pin electronics."""
 
-    dut: "DUTModel | None"
+    dut: DUTModel | None
+    levels: LevelsSet
+    timing: TimingSet
 
     @abstractmethod
-    def apply_levels(self, levels: "LevelsSet") -> None:
+    def apply_levels(self, levels: LevelsSet) -> None:
         """Select the level set used for drive and compare."""
 
     @abstractmethod
-    def apply_timing(self, timing: "TimingSet") -> None:
+    def apply_timing(self, timing: TimingSet) -> None:
         """Select the timing set."""
 
     @abstractmethod
-    def load_pattern(self, pattern: "Pattern | str | Any") -> "Pattern":
+    def load_pattern(self, pattern: Pattern | str | Any) -> Pattern:
         """Load a parsed pattern, a path or raw text."""
 
     @abstractmethod
@@ -37,5 +39,5 @@ class DigitalChannel(ABC):
     @abstractmethod
     def run(self, *, start_label: str | None = None, stop_on_first_fail: bool = True,
             max_cycles: int | None = None, capture_start: int | None = None,
-            capture_stop: int | None = None) -> "PatternResult":
+            capture_stop: int | None = None, completion_mode: str = "complete") -> PatternResult:
         """Execute the loaded pattern and return the compare result."""

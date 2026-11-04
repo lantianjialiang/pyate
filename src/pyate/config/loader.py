@@ -11,7 +11,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -36,7 +36,7 @@ from .models import (
     WaferConfig,
 )
 
-__all__ = ["ConfigError", "LoadedSession", "load_session", "read_config", "deep_merge"]
+__all__ = ["ConfigError", "LoadedSession", "deep_merge", "load_session", "read_config"]
 
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::([^}]*))?\}")
 
@@ -178,7 +178,7 @@ def _load_limits(path: Path) -> LimitsConfig:
                 except (KeyError, ValueError) as exc:
                     raise ConfigError(f"{path}:{index}: bad limit row: {exc}") from exc
         return LimitsConfig(limits=rows)
-    return _load_yaml_model(path, LimitsConfig, "limits")
+    return cast(LimitsConfig, _load_yaml_model(path, LimitsConfig, "limits"))
 
 
 @dataclass
@@ -303,7 +303,19 @@ def load_session(
         raise ConfigError(f"session ({session_path}):\n{exc}") from exc
 
     root = session_path.parent
+    if spec.extensions:
+        from ..plugins import get_manager
+        schemas = get_manager().registry.config_sections
+        errors = []
+        for name, data in spec.extensions.items():
+            try:
+                schemas[name].model_validate(data)
+            except Exception as exc:
+                errors.append(f"{session_path}: extensions.{name}: {exc}")
+        if errors:
+            raise ConfigError(errors)
     files: dict[str, str] = {}
+    prepared: dict[str, Any] = {}
 
     def resolve(rel: str | None) -> Path | None:
         if not rel:
@@ -312,6 +324,8 @@ def load_session(
         return candidate if candidate.is_absolute() else (root / candidate).resolve()
 
     def load(rel: str, model: type[Any], label: str) -> Any:
+        if label in prepared:
+            return prepared[label]
         target = resolve(rel)
         assert target is not None
         files[label] = str(target)
@@ -330,6 +344,33 @@ def load_session(
     ]
     if missing:
         raise ConfigError(f"session: missing required file reference(s): {', '.join(missing)}")
+
+    # Validate referenced documents independently before constructing the session.
+    # A malformed tester must not hide an unrelated missing limits/program file.
+    schema_errors: list[str] = []
+    section_models = {
+        "tester": TesterConfig, "channel_map": ChannelMapConfig,
+        "levels": LevelsConfig, "timing": TimingConfig, "binning": BinningConfig,
+        "program": TestProgram, "dut_profile": DutProfile, "loadboard": LoadboardConfig,
+        "wafer": WaferConfig, "lot": LotConfig, "prober": ProberConfig,
+        "handler": HandlerConfig, "stdf": StdfOptions,
+    }
+    for label, model in section_models.items():
+        reference = getattr(spec, label)
+        if reference:
+            try:
+                prepared[label] = load(reference, model, label)
+            except ConfigError as exc:
+                schema_errors.append(str(exc))
+    if spec.limits:
+        try:
+            target = resolve(spec.limits)
+            assert target is not None
+            prepared["limits"] = _load_limits(target)
+        except (ConfigError, OSError, ValueError) as exc:
+            schema_errors.append(f"limits ({resolve(spec.limits)}): {exc}")
+    if schema_errors:
+        raise ConfigError(schema_errors)
 
     tester = load(spec.tester, TesterConfig, "tester")
     channel_map = load(spec.channel_map, ChannelMapConfig, "channel_map")
@@ -351,7 +392,7 @@ def load_session(
         if not limits_path.is_file():
             raise ConfigError(f"limits ({limits_path}): file not found")
         files["limits"] = str(limits_path)
-        limits = _load_limits(limits_path)
+        limits = prepared["limits"]
 
     loadboard = load(spec.loadboard, LoadboardConfig, "loadboard") if spec.loadboard else None
     wafer = load(spec.wafer, WaferConfig, "wafer") if spec.wafer else None
@@ -386,7 +427,7 @@ def load_session(
 
         report: ValidationReport = validate_session(session)
         if report.errors:
-            raise ConfigError([str(session_path)] + report.errors)
+            raise ConfigError([str(session_path), *report.errors])
     return session
 
 

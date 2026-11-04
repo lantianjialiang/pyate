@@ -27,9 +27,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QSplitter,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -52,12 +52,12 @@ from .widgets import (
 )
 
 __all__ = [
+    "BatchPanel",
     "ConfigPanel",
     "FlowPanel",
     "LimitsPanel",
-    "RunPanel",
-    "BatchPanel",
     "PatternPanel",
+    "RunPanel",
 ]
 
 
@@ -123,7 +123,7 @@ def summary_cells(row: Any) -> list[str]:
 class SortCell(QTableWidgetItem):
     """Table cell that sorts by the value stored in ``UserRole``."""
 
-    def __lt__(self, other: QTableWidgetItem) -> bool:  # noqa: N802 - Qt naming
+    def __lt__(self, other: QTableWidgetItem) -> bool:
         left = self.data(Qt.UserRole)
         right = other.data(Qt.UserRole)
         if isinstance(left, (int, float)) and isinstance(right, (int, float)):
@@ -316,7 +316,7 @@ class ConfigPanel(QWidget):
             return
         try:
             document = self.vm.file_document(str(key))
-        except Exception as exc:  # noqa: BLE001 - shown next to the editor
+        except Exception as exc:
             self.editor.status.setText(str(exc))
             return
         if document is None:
@@ -355,7 +355,7 @@ class ConfigPanel(QWidget):
             return
         try:
             document = self.vm.file_document(key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             self.editor.status.setText(str(exc))
             return
         if document is None:
@@ -367,7 +367,7 @@ class ConfigPanel(QWidget):
         """Write edited limits back to the session's CSV."""
         try:
             path = self.vm.save_limits()
-        except Exception as exc:  # noqa: BLE001 - reported in the UI
+        except Exception as exc:
             QMessageBox.warning(self, "save limits", str(exc))
             return
         self.output.appendPlainText(f"limits written to {path}")
@@ -385,7 +385,7 @@ class _FlowTree(QTreeWidget):
         self.setDefaultDropAction(Qt.MoveAction)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
 
-    def dropEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def dropEvent(self, event: Any) -> None:
         source = self.currentItem()
         if source is None:
             event.ignore()
@@ -504,7 +504,7 @@ class FlowPanel(QWidget):
             parent.addTopLevelItem(item)
         item.setExpanded(True)
         for index, child in enumerate(node.get("children", []) or []):
-            self._add_node(item, child, path + [index])
+            self._add_node(item, child, [*path, index])
 
     def _on_item_changed(self, item: QTreeWidgetItem, _column: int) -> None:
         if self._loading:
@@ -1287,7 +1287,7 @@ class RunPanel(QWidget):
         def work() -> None:
             try:
                 data = run_shmoo(Session(path), params=params)
-            except Exception as exc:  # noqa: BLE001 - reported on the GUI thread
+            except Exception as exc:
                 self.shmooReady.emit({"error": str(exc)})
                 return
             self.shmooReady.emit(data)
@@ -1391,6 +1391,10 @@ class RunPanel(QWidget):
 
     # ------------------------------------------------------------------- tick
     def _tick(self) -> None:
+        with self.vm.lock:
+            self._render_tick()
+
+    def _render_tick(self) -> None:
         if not self.vm.should_render():
             return
         snapshot = self.vm.snapshot()
@@ -1441,7 +1445,7 @@ class RunPanel(QWidget):
 
     def _refresh_rows(self) -> None:
         site = self.site_filter.currentData()
-        rows = [row for row in self.vm.rows_for_site(site)]
+        rows = list(self.vm.rows_for_site(site))
         colors = bins_colors()
         self.datalog.setSortingEnabled(False)
         self.datalog.setRowCount(len(rows))
@@ -1599,7 +1603,7 @@ class BatchPanel(QWidget):
             self.status.setText("select a job that already has an output directory")
             return
         if os.name == "nt":
-            os.startfile(path)  # noqa: S606 - user asked to open the folder
+            os.startfile(path)
         else:
             self.status.setText(path)
 
@@ -1712,7 +1716,7 @@ class PatternPanel(QWidget):
                 period_ns=self.period.value(),
                 max_cycles=self.cycles.value(),
             )
-        except Exception as exc:  # noqa: BLE001 - shown in the panel
+        except Exception as exc:
             self.output.setPlainText(f"{type(exc).__name__}: {exc}")
             return
         lines = [

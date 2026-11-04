@@ -11,7 +11,8 @@ OEE = availability × performance × quality.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 
 __all__ = ["EquipmentStats"]
 
@@ -29,6 +30,14 @@ class EquipmentStats:
     jams: int = 0
     ideal_test_ms: float | None = None
     index_time_ms: float = 0.0
+    _configured_ideal: bool = field(init=False, default=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.ideal_test_ms is not None and (
+            not math.isfinite(self.ideal_test_ms) or self.ideal_test_ms <= 0
+        ):
+            raise ValueError("ideal_test_ms must be a finite positive time")
+        self._configured_ideal = self.ideal_test_ms is not None
 
     def add_touchdown(self, *, tested: int, passed: int, test_ms: float,
                       index_ms: float, jam_ms: float = 0.0) -> None:
@@ -42,7 +51,7 @@ class EquipmentStats:
         if float(jam_ms) > 0:
             self.jams += 1
             self.downtime_ms += float(jam_ms)
-        if int(tested) > 0 and float(test_ms) > 0:
+        if not self._configured_ideal and int(tested) > 0 and float(test_ms) > 0:
             if self.ideal_test_ms is None or float(test_ms) < self.ideal_test_ms:
                 self.ideal_test_ms = float(test_ms)
 
@@ -104,9 +113,12 @@ class EquipmentStats:
         """Availability × performance × quality, in 0..1."""
         return self.availability * self.performance * self.quality
 
-    def to_dict(self) -> dict[str, float | int]:
+    def to_dict(self) -> dict[str, float | int | str | None]:
         """Rounded figures for events and ``summary.json``."""
         return {
+            "ideal_test_ms": self.ideal_test_ms,
+            "ideal_source": "configured" if self._configured_ideal else "observed_minimum",
+            "planned_ms": round(self.planned_ms, 3),
             "tested": self.tested,
             "passed": self.passed,
             "touchdowns": self.touchdowns,

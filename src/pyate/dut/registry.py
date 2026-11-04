@@ -7,14 +7,21 @@ that every scenario gets the exact same behaviour for the same seed.
 from __future__ import annotations
 
 import random
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
-from .base import DUTModel, Defect
+from .base import Defect, DUTModel
+from .identity import DUTInstanceSpec, stable_seed
 from .sampling import YieldSampler, mix_seed
 
 __all__ = [
-    "register_dut", "get_dut_class", "is_registered", "list_models", "create_dut",
-    "YieldSampler", "mix_seed",
+    "YieldSampler",
+    "create_dut",
+    "get_dut_class",
+    "is_registered",
+    "list_models",
+    "mix_seed",
+    "register_dut",
 ]
 
 _REGISTRY: dict[str, type[DUTModel]] = {}
@@ -68,10 +75,7 @@ def _defect_from_spec(spec: Any) -> Defect:
     """Convert a config ``DefectSpec``/dict into a :class:`Defect`."""
     if isinstance(spec, Defect):
         return spec
-    if hasattr(spec, "model_dump"):
-        raw = spec.model_dump()
-    else:
-        raw = dict(spec)
+    raw = spec.model_dump() if hasattr(spec, "model_dump") else dict(spec)
     return Defect(
         kind=raw["kind"],
         pin=raw.get("pin"),
@@ -92,6 +96,7 @@ def create_dut(
     wafer_radius: float | None = None,
     sampler: YieldSampler | None = None,
     sample_yield: bool = True,
+    instance: DUTInstanceSpec | None = None,
 ) -> DUTModel:
     """Instantiate a DUT from a ``DutProfile`` (or a compatible duck type).
 
@@ -99,6 +104,16 @@ def create_dut(
     ``process``.  ``x``/``y`` are die coordinates in millimetres, used by the
     spatial yield model.
     """
+    if instance is not None:
+        if instance.profile_json:
+            from ..config.models import DutProfile
+            profile = DutProfile.model_validate_json(instance.profile_json)
+        seed = stable_seed(instance.population_seed, instance.identity.key, "population")
+        x, y = instance.x_mm, instance.y_mm
+        sampler = YieldSampler(profile.yield_, instance.spatial_seed,
+                               wafer_radius=instance.wafer_radius_mm)
+        # Keep the wafer's spatial field while independently sampling each part.
+        sampler.seed = seed
     cls = get_dut_class(profile.model)
     rng = random.Random(mix_seed(seed, x, y))
     dut = cls(dict(profile.params), rng)
@@ -121,4 +136,6 @@ def create_dut(
             )
         defects.extend(active_sampler.defects_for(x, y, dut))
     dut.inject_all(defects)
+    dut.instance_spec = instance
+    dut.noise_seed = stable_seed(seed, f"{x}/{y}", "measurement")
     return dut

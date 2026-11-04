@@ -49,7 +49,7 @@ def inspect_stdf(path: str | Path) -> dict[str, Any]:
         return empty
     try:
         records = read_stdf(file_path)
-    except Exception as exc:  # noqa: BLE001 - shown in the STDF panel
+    except Exception as exc:
         empty["errors"] = [f"cannot decode: {exc}"]
         return empty
     return _assemble(file_path, records)

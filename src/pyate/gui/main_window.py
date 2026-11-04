@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -21,7 +20,8 @@ from ..api import ConfigProblem, EventBus, Session
 from .app import application_icon
 from .panels import BatchPanel, ConfigPanel, FlowPanel, LimitsPanel, PatternPanel, RunPanel
 from .stdf_panel import StdfPanel
-from .theme import set_theme as set_canvas_theme, stylesheet
+from .theme import set_theme as set_canvas_theme
+from .theme import stylesheet
 from .viewmodels import BatchViewModel, ConfigViewModel, RunViewModel
 
 __all__ = ["MainWindow"]

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import ast
 import operator
-from typing import Any, Callable, Iterator
+from collections.abc import Callable, Iterator
+from typing import Any
 
 from ..config.models import FlowNode, TestProgram
 from .context import SiteContext
@@ -45,7 +46,7 @@ _ALLOWED_NODES = (
     ast.Call, ast.Name, ast.Constant, ast.Load, ast.Tuple, ast.List, ast.keyword,
     *_BIN_OPS.keys(), *_UNARY_OPS.keys(), *_COMPARE_OPS.keys(),
 )
-_ALLOWED_FUNCS = {
+_ALLOWED_FUNCS: dict[str, Callable[..., Any]] = {
     "abs": abs, "min": min, "max": max, "round": round, "len": len,
     "int": int, "float": float, "bool": bool, "str": str,
 }
@@ -100,7 +101,7 @@ class SafeExpression:
             return self._eval(self._tree.body, names)
         except ExpressionError:
             raise
-        except Exception as exc:  # noqa: BLE001 - runtime errors become ExpressionError
+        except Exception as exc:
             raise ExpressionError(f"cannot evaluate '{self.source}': {exc}") from exc
 
     def __call__(self, ctx: SiteContext, extra: dict[str, Any] | None = None) -> Any:

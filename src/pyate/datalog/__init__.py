@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from .result import CpkAccumulator, Capability, bin_pareto, capability, histogram
+from .result import Capability, CpkAccumulator, bin_pareto, capability, histogram
 
 __all__ = [
-    "CpkAccumulator",
     "Capability",
+    "CpkAccumulator",
     "bin_pareto",
     "capability",
     "histogram",

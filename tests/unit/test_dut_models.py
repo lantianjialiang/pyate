@@ -6,7 +6,9 @@ import math
 
 import pytest
 
-from pyate.dut.base import DUTError, Defect
+from conftest import CONFIGS
+from pyate.config.loader import load_session
+from pyate.dut.base import Defect, DUTError
 from pyate.dut.models.adder import AdderModel
 from pyate.dut.models.composite import CompositeModel
 from pyate.dut.models.counter import CounterModel
@@ -22,9 +24,6 @@ from pyate.dut.registry import (
     list_models,
     mix_seed,
 )
-
-from conftest import CONFIGS  # noqa: F401  (keeps the shared conftest import path)
-from pyate.config.loader import load_session
 
 
 def _bits(value: int, width: int, prefix: str = "B") -> dict[str, int]:

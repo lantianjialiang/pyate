@@ -5,12 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
+from conftest import CP_SESSION, FT_SESSION, small_cp_overrides, small_ft_overrides
 from pyate.api import RunOptions, create_run
 from pyate.datalog.stdf.records import iter_records
-
-from conftest import CP_SESSION, FT_SESSION, small_cp_overrides, small_ft_overrides
 
 #: Fields that legitimately change between two runs of the same simulation.
 VOLATILE = {
@@ -19,8 +16,6 @@ VOLATILE = {
     "ATR": {"MOD_TIM"},
     "WIR": {"START_T"},
     "WRR": {"FINISH_T"},
-    "PRR": {"TEST_T"},
-    "TSR": {"TEST_TIM", "TEST_MIN", "TEST_MAX", "TST_SUMS", "TST_SQRS"},
 }
 
 
@@ -48,7 +43,7 @@ def test_cp_stdf_is_identical_except_for_the_clock_fields(tmp_path) -> None:
     second, second_summary = _run(CP_SESSION, small_cp_overrides(), tmp_path / "b")
     assert first_summary.bin_counts == second_summary.bin_counts
     assert len(_normalised(first)) == len(_normalised(second))
-    assert [record for record in _normalised(first)] == [record for record in _normalised(second)]
+    assert list(_normalised(first)) == list(_normalised(second))
 
 
 def test_cp_stdf_records_match_field_by_field(tmp_path) -> None:

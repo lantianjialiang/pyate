@@ -13,7 +13,7 @@ from conftest import ROOT
 TOOLS = ROOT / "tools"
 
 
-def _load(name: str):  # noqa: ANN202 - dynamic module
+def _load(name: str):
     spec = importlib.util.spec_from_file_location(f"pyate_tools_{name}", TOOLS / f"{name}.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -23,12 +23,12 @@ def _load(name: str):  # noqa: ANN202 - dynamic module
 
 
 @pytest.fixture(scope="module")
-def exporter():  # noqa: ANN201
+def exporter():
     return _load("export_wafer_map")
 
 
 @pytest.fixture(scope="module")
-def coverage_tool():  # noqa: ANN201
+def coverage_tool():
     return _load("coverage_std")
 
 

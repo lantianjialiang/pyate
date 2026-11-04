@@ -9,11 +9,11 @@ from .runner import BatchRunner, BatchSummary, JobResult, run_job, write_batch_c
 from .spec import BatchSpec, BatchSpecError, JobSpec, expand_jobs, load_batch
 
 __all__ = [
+    "CONTACT_FAIL_BIN",
     "BatchRunner",
     "BatchSpec",
     "BatchSpecError",
     "BatchSummary",
-    "CONTACT_FAIL_BIN",
     "Job",
     "JobQueue",
     "JobResult",

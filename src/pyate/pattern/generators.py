@@ -18,9 +18,16 @@ from ..dut.models.shiftreg import ShiftRegModel
 from ..dut.models.sram import SramModel
 
 __all__ = [
-    "counter_pattern", "shift_pattern", "composite_pattern", "counter_loop_pattern",
-    "adder_pattern", "lfsr_pattern", "sram_pattern", "generate", "write_pattern",
     "GENERATORS",
+    "adder_pattern",
+    "composite_pattern",
+    "counter_loop_pattern",
+    "counter_pattern",
+    "generate",
+    "lfsr_pattern",
+    "shift_pattern",
+    "sram_pattern",
+    "write_pattern",
 ]
 
 
@@ -232,7 +239,7 @@ def generate(name: str, **kwargs: Any) -> str:
         func = GENERATORS[name]
     except KeyError as exc:
         raise KeyError(f"unknown generator '{name}' (available: {', '.join(sorted(GENERATORS))})") from exc
-    return func(**kwargs)
+    return str(func(**kwargs))
 
 
 def write_pattern(directory: str | Path, filename: str, text: str) -> Path:

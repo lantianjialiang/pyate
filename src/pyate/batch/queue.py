@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable
+from typing import Any
 
 from .spec import JobSpec
 
-__all__ = ["JobStatus", "Job", "JobQueue"]
+__all__ = ["Job", "JobQueue", "JobStatus"]
 
 
 class JobStatus(str, Enum):

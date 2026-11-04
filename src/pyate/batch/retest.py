@@ -8,4 +8,4 @@ from __future__ import annotations
 
 from ..engine.retest import CONTACT_FAIL_BIN, RetestConfig, merge_attempt, should_retest
 
-__all__ = ["RetestConfig", "should_retest", "merge_attempt", "CONTACT_FAIL_BIN"]
+__all__ = ["CONTACT_FAIL_BIN", "RetestConfig", "merge_attempt", "should_retest"]

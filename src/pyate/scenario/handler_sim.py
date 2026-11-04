@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Iterator, Sequence
+from collections.abc import Iterator, Sequence
 
 from ..config.models import HandlerConfig
 from ..engine.context import TouchdownInfo
@@ -48,7 +48,7 @@ class HandlerSimulator:
             prob = float(getattr(self.config, "contact_fail_prob", 0.0) or 0.0)
             contact_fail = {
                 slot for slot, _x, _y, _pid in entries
-                if slot > 1 and prob > 0 and self.rng.random() < prob
+                if prob > 0 and self.rng.random() < prob
             }
             yield TouchdownInfo(
                 touch_id=touch_id,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import CONFIGS
 from pyate.config.loader import load_session
 from pyate.dut.base import Defect
 from pyate.dut.registry import create_dut
@@ -11,8 +12,6 @@ from pyate.engine.context import SiteContext
 from pyate.hal.simulated import SimulatedHAL
 from pyate.testitems.base import LimitsTable
 from pyate.testitems.registry import create_testitem, is_registered, list_testitems
-
-from conftest import CONFIGS
 
 SESSION = CONFIGS / "demo_cp"
 
@@ -40,7 +39,7 @@ def rig():
 
 
 def _run(name: str, params: dict | None = None, test_num: int = 1000, rig=None):
-    session, hal, dut, ctx = rig
+    _session, hal, _dut, ctx = rig
     item = create_testitem(name, test_num, params or {})
     item.setup(ctx, hal)
     try:
@@ -90,7 +89,7 @@ def test_continuity_passes_on_a_healthy_die(rig) -> None:
 
 
 def test_continuity_detects_an_open_pin(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, dut, _ctx = rig
     dut.inject(Defect("open", pin="Q0"))
     results = _run("continuity", {"pins": ["Q0"]}, rig=rig)
     assert not results[0].passed
@@ -98,7 +97,7 @@ def test_continuity_detects_an_open_pin(rig) -> None:
 
 
 def test_continuity_defaults_to_every_signal_pin(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, dut, _ctx = rig
     results = _run("continuity", {}, rig=rig)
     assert len(results) == len(dut.signal_pins)
 
@@ -156,7 +155,7 @@ def test_leakage_measures_both_polarities(rig) -> None:
 
 
 def test_leakage_fails_with_a_leaky_pin(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, dut, _ctx = rig
     dut.inject(Defect("leakage", pin="RSTN", na=5000.0))
     results = _run("leakage_ih_il", {"pins": ["RSTN"], "hi": 100e-9}, rig=rig)
     assert any(not result.passed for result in results)
@@ -173,7 +172,7 @@ def test_functional_passes_on_a_healthy_die(rig) -> None:
 
 
 def test_functional_reports_failing_pins(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, _hal, dut, _ctx = rig
     dut.inject(Defect("stuck_at", pin="Q2", value=0))
     results = _run("functional", {"pattern": "cnt_basic.pat"}, rig=rig)
     result = results[0]
@@ -206,7 +205,7 @@ def test_sram_march_passes_on_a_healthy_die() -> None:
 
 # -------------------------------------------------------------- misc items
 def test_delay_advances_simulated_time(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, hal, _dut, _ctx = rig
     hal.reset_clock()
     results = _run("delay_ms", {"ms": 2.5}, rig=rig)
     assert results[0].value == pytest.approx(2.5)
@@ -227,7 +226,7 @@ def test_user_code_calls_a_real_function(rig, tmp_path, monkeypatch) -> None:
 
 
 def test_user_code_reports_an_unresolvable_callable(rig) -> None:
-    session, hal, dut, ctx = rig
+    _session, hal, _dut, ctx = rig
     item = create_testitem("user_code", 1, {"callable": "no.such.function"})
     with pytest.raises(Exception):
         item.execute(ctx, hal)

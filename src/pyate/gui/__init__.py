@@ -11,7 +11,7 @@ from __future__ import annotations
 __all__ = ["create_app", "create_window", "main"]
 
 
-def __getattr__(name: str):  # noqa: ANN201 - lazy Qt import
+def __getattr__(name: str):
     """Import the Qt layer lazily so ``pyate.gui.viewmodels`` stays Qt free."""
     if name in ("create_app", "create_window", "main"):
         from . import app

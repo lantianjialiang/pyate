@@ -21,7 +21,7 @@ class TimingPlan:
     strobe_ns: float
 
     @classmethod
-    def from_set(cls, timing: TimingSet) -> "TimingPlan":
+    def from_set(cls, timing: TimingSet) -> TimingPlan:
         """Build a plan from a configured timing set."""
         edges = timing.edges
         return cls(

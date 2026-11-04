@@ -242,7 +242,7 @@ class ConfigViewModel:
             return ValidationResult(False, "no session loaded")
         try:
             self.session.set_item_params(stage, path, params)
-        except Exception as exc:  # noqa: BLE001 - pydantic or a missing node
+        except Exception as exc:
             return ValidationResult(False, str(exc))
         return ValidationResult(True, "parameters updated")
 
@@ -254,7 +254,7 @@ class ConfigViewModel:
         try:
             self.session.set_on_fail(stage, path, action=action, bin=bin,
                                      max_retries=max_retries)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ValidationResult(False, str(exc))
         return ValidationResult(True, "on_fail updated")
 
@@ -270,7 +270,7 @@ class ConfigViewModel:
             return ValidationResult(False, "no session loaded")
         try:
             self.session.reorder_flow(stage, parent_path, order)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ValidationResult(False, str(exc))
         return ValidationResult(True, "flow reordered")
 
@@ -280,7 +280,7 @@ class ConfigViewModel:
             return {}
         try:
             return self.session.item_schema(name)
-        except Exception:  # noqa: BLE001 - unknown item, the form stays empty
+        except Exception:
             return {}
 
     def import_limits_csv(self, text: str) -> ValidationResult:
@@ -296,6 +296,6 @@ class ConfigViewModel:
             return ValidationResult(False, "no session loaded")
         try:
             target = self.session.export_limits_csv(path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             return ValidationResult(False, str(exc))
         return ValidationResult(True, f"exported {target}")

@@ -5,11 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALError, HALBackend
+from ..hal.base import HALBackend, HALError
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
-__all__ = ["ContinuityParams", "ContinuityItem"]
+__all__ = ["ContinuityItem", "ContinuityParams"]
 
 
 class ContinuityParams(TestItemParams):
@@ -42,7 +42,7 @@ class ContinuityItem(TestItem):
 
     def execute(self, ctx: SiteContext, hal: HALBackend) -> list[TestResult]:
         resources = hal.site(ctx.site_id)
-        dut = ctx.dut or hal.dut(ctx.site_id)  # type: ignore[attr-defined]
+        dut = ctx.dut or hal.dut(ctx.site_id)
         if dut is None:
             raise HALError("continuity needs a bound DUT", site=ctx.site_id)
         pins = list(self.params.pins) or list(dut.signal_pins)

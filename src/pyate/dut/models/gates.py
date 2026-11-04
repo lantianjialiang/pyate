@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import random
-from typing import Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from ..base import DUTModel, PinSpec
 

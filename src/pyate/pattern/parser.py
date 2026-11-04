@@ -24,9 +24,9 @@ the lowest index (``Q=LLLLLLLH`` means ``Q7=1`` for an 8-bit bus).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Iterable
 
 from .model import (
     HaltOp,
@@ -41,7 +41,7 @@ from .model import (
     VectorOp,
 )
 
-__all__ = ["parse_pattern_text", "parse_pattern_file", "load_pattern"]
+__all__ = ["load_pattern", "parse_pattern_file", "parse_pattern_text"]
 
 _ASSIGN_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_]*)(?:\[\s*\d+\s*(?::\s*\d+\s*)?\])?\s*=\s*([0-9LHXZC]+)",
@@ -54,7 +54,7 @@ _MAX_INCLUDE_DEPTH = 8
 
 
 class _Statement:
-    __slots__ = ("text", "line", "source")
+    __slots__ = ("line", "source", "text")
 
     def __init__(self, text: str, line: int, source: str) -> None:
         self.text = text
@@ -147,6 +147,7 @@ class _Parser:
         self.labels: dict[str, int] = {}
         self.timing: str | None = None
         self.levels: str | None = None
+        self.capture_pins: list[str] = []
 
     # ---------------------------------------------------------------- helpers
     def _peek(self) -> _Statement | None:
@@ -295,7 +296,13 @@ class _Parser:
                         block.append(VectorOp(self._parse_vector(nested.text, nested)))
                 block.append(LoopEndOp(-1))
             elif lower.startswith("capture"):
-                raise ParseError("'capture' is not supported in this version", stmt.line, stmt.source)
+                targets = text[len("capture"):].strip().rstrip(";")
+                if not targets:
+                    raise ParseError("capture requires output pin names", stmt.line, stmt.source)
+                for target in targets.split(","):
+                    for pin in self._resolve_pin_names(target.strip(), stmt):
+                        if pin not in self.capture_pins:
+                            self.capture_pins.append(pin)
             else:
                 block.append(VectorOp(self._parse_vector(text, stmt)))
         return block
@@ -317,7 +324,9 @@ def _patch_loops(program: list[Instruction]) -> list[Instruction]:
             if not stack:
                 raise ParseError("unmatched '}'")
             start = stack.pop()
-            out[start] = replace(out[start], end_pc=index + 1)
+            loop_start = out[start]
+            assert isinstance(loop_start, LoopStartOp)
+            out[start] = replace(loop_start, end_pc=index + 1)
             out[index] = LoopEndOp(start)
     if stack:
         raise ParseError("unterminated loop")
@@ -370,6 +379,7 @@ def parse_pattern_text(text: str, *, name: str | None = None,
         labels=dict(labels),
         timing=parser.timing,
         levels=parser.levels,
+        capture_pins=list(parser.capture_pins),
         source=source,
         includes=loader.includes,
     )
@@ -394,6 +404,7 @@ def parse_pattern_file(path: str | Path) -> Pattern:
         labels=dict(labels),
         timing=parser.timing,
         levels=parser.levels,
+        capture_pins=list(parser.capture_pins),
         source=str(file_path),
         includes=[item for item in loader.includes if item != str(file_path)],
     )

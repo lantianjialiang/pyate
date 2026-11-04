@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Mapping
+from collections.abc import Callable, Mapping
 
 from ..config.models import LevelsSet, TimingSet
 from ..dut.base import DUTModel
@@ -38,6 +38,7 @@ class PatternEngine:
         noise_sigma: float = 0.0,
         max_fail_log: int = 1000,
         max_cycles: int = 1_000_000,
+        cancel_check: Callable[[], None] | None = None,
     ) -> None:
         self.dut = dut
         self.levels = levels
@@ -48,6 +49,7 @@ class PatternEngine:
         self.noise_sigma = float(noise_sigma)
         self.max_fail_log = int(max_fail_log)
         self.max_cycles = int(max_cycles)
+        self.cancel_check = cancel_check
 
     # ------------------------------------------------------------------ util
     def _plan(self, vector: Vector) -> TimingPlan:
@@ -79,14 +81,23 @@ class PatternEngine:
         capture_start: int | None = None,
         capture_stop: int | None = None,
         capture_pins: list[str] | None = None,
+        completion_mode: str = "complete",
+        max_instructions: int | None = None,
     ) -> PatternResult:
         """Execute ``pattern`` and collect fail information."""
         program = pattern.program
         labels = pattern.labels
-        limit = int(max_cycles or self.max_cycles)
+        limit = int(self.max_cycles if max_cycles is None else max_cycles)
+        if limit <= 0 or completion_mode not in ("complete", "window"):
+            raise ValueError("positive max_cycles and complete/window completion_mode required")
+        instruction_limit = max_instructions or max(limit * 16, len(program) * 2)
+        instructions = 0
         result = PatternResult()
         counters: dict[int, int] = {}
-        captures: dict[str, list[int]] = {pin: [] for pin in (capture_pins or [])}
+        selected_pins = pattern.capture_pins if capture_pins is None else capture_pins
+        captures: dict[str, list[int]] = {pin: [] for pin in selected_pins}
+        if any(pin not in self.dut.output_pins for pin in captures):
+            raise ValueError("capture pins must be DUT output pins")
         cycles = 0
         vector_address = 0
         elapsed_ns = 0.0
@@ -96,6 +107,12 @@ class PatternEngine:
         total_fail = 0
 
         while pc < len(program):
+            if instructions % 256 == 0 and self.cancel_check is not None:
+                self.cancel_check()
+            if instructions >= instruction_limit:
+                result.stopped_at = "instruction_budget"
+                break
+            instructions += 1
             op = program[pc]
             if isinstance(op, HaltOp):
                 result.stopped_at = "halt"
@@ -131,23 +148,33 @@ class PatternEngine:
             plan = self._plan(vector)
             elapsed_ns += plan.period_ns
             outputs = self._apply_vector(vector)
+            min_period = self.dut.min_period_ns(self.dut.vdd)
+            output_delay = float(self.dut.params["output_delay_fraction"]) * min_period
+            sample_time = min(plan.strobe_ns, plan.period_ns)
+            unsettled = sample_time < max(plan.drive_on_ns, plan.data_ns) + output_delay
+            if (capture_start is None or cycles >= capture_start) and (
+                capture_stop is None or cycles <= capture_stop
+            ):
+                for pin in captures:
+                    value = None if unsettled else outputs.get(pin)
+                    captures[pin].append(-1 if value is None else int(value))
 
             expected = vector.compare_pins()
             if expected:
                 failing: list[str] = []
                 actual: dict[str, int | None] = {}
-                min_period = self.dut.min_period_ns(self.dut.vdd)
                 timing_violation = plan.period_ns < min_period
                 for pin, want in expected.items():
                     got = outputs.get(pin)
                     actual[pin] = got
-                    if timing_violation or got is None or got != want:
+                    voltage = self.dut.output_voltage(pin) if got is not None else None
+                    voltage_failed = voltage is None or (
+                        voltage < self.levels.voh if want else voltage > self.levels.vol
+                    )
+                    if unsettled or timing_violation or got is None or got != want or voltage_failed:
                         failing.append(pin)
                 if not failing and timing_violation:  # pragma: no cover - covered above
                     failing = list(expected)
-                for pin in captures:
-                    value = outputs.get(pin)
-                    captures[pin].append(-1 if value is None else int(value))
                 if failing:
                     total_fail += len(failing)
                     if result.first_fail_cycle is None:
@@ -171,7 +198,13 @@ class PatternEngine:
 
         result.cycles = cycles
         result.fail_count = total_fail
-        result.passed = total_fail == 0
+        result.completed = result.stopped_at not in ("max_cycles", "instruction_budget")
+        result.status = ("completed" if result.completed else "incomplete")
+        if result.stopped_at == "max_cycles" and completion_mode == "window":
+            result.status = "window"
+        result.passed = total_fail == 0 and result.status in ("completed", "window")
+        if total_fail:
+            result.status = "failed"
         result.elapsed_ms = elapsed_ns / 1e6
         result.captures = captures
         result.merge_fail_pins()

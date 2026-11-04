@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from pyate.api import EventKind, EventBus, RunOptions, create_run
-from pyate.datalog.stdf.reader_check import verify_stdf
-
 from conftest import FT_SESSION, small_ft_overrides
+from pyate.api import EventBus, EventKind, RunOptions, create_run
+from pyate.datalog.stdf.reader_check import verify_stdf
 
 RETEST = {"run.retest_bins": [2], "run.max_retries": 1}
 
@@ -31,7 +30,7 @@ def ft_runs(tmp_path_factory):
 
 
 def test_tray_run_tests_every_loaded_part(ft_runs) -> None:
-    (base_summary, output), _ = ft_runs
+    (base_summary, _output), _ = ft_runs
     assert base_summary.stage == "FT1"
     assert base_summary.total_parts == 40
     assert base_summary.total_tested == base_summary.total_parts
@@ -39,13 +38,13 @@ def test_tray_run_tests_every_loaded_part(ft_runs) -> None:
 
 
 def test_contact_failures_produce_a_fail_bin(ft_runs) -> None:
-    (base_summary, output), _ = ft_runs
+    (base_summary, _output), _ = ft_runs
     assert base_summary.bin_counts.get(2, 0) > 0, "contact fail injection must show up"
     assert base_summary.yield_pct < 100.0
 
 
 def test_retest_improves_the_yield(ft_runs) -> None:
-    (base_summary, base_out), (retest_summary, retest_out) = ft_runs
+    (base_summary, _base_out), (retest_summary, _retest_out) = ft_runs
     assert retest_summary.total_parts == base_summary.total_parts
     assert retest_summary.yield_pct > base_summary.yield_pct
     assert retest_summary.bin_counts.get(2, 0) < base_summary.bin_counts.get(2, 0)
@@ -53,7 +52,7 @@ def test_retest_improves_the_yield(ft_runs) -> None:
 
 
 def test_stdf_of_the_retest_run_is_valid_and_flags_retested_parts(ft_runs) -> None:
-    (base_summary, base_out), (retest_summary, retest_out) = ft_runs
+    (_base_summary, base_out), (retest_summary, retest_out) = ft_runs
     stdf = sorted(retest_out.glob("*.stdf"))[0]
     report = verify_stdf(stdf)
     assert report.ok, report.errors[:3]
@@ -65,7 +64,7 @@ def test_stdf_of_the_retest_run_is_valid_and_flags_retested_parts(ft_runs) -> No
 
 
 def test_jam_recovery_is_reported(ft_runs) -> None:
-    (base_summary, output), _ = ft_runs
+    (base_summary, _output), _ = ft_runs
     unit = base_summary.units[0]
     assert unit.kind == "tray"
     assert unit.meta["touchdowns"] >= 1
@@ -73,7 +72,7 @@ def test_jam_recovery_is_reported(ft_runs) -> None:
 
 
 def test_tray_artefacts_are_written(ft_runs) -> None:
-    (base_summary, output), _ = ft_runs
+    (_base_summary, output), _ = ft_runs
     assert (output / "summary.json").is_file()
     assert (output / "T01_summary.json").is_file()
 
@@ -93,7 +92,7 @@ def test_ft_events_carry_part_ids(tmp_path) -> None:
 
 
 def test_ft_is_reproducible_for_the_same_seed(ft_runs, tmp_path) -> None:
-    (base_summary, output), _ = ft_runs
+    (base_summary, _output), _ = ft_runs
     again = create_run(FT_SESSION, small_ft_overrides(**{"run.max_retries": 0}),
                        RunOptions(output_dir=tmp_path))
     again.prepare()

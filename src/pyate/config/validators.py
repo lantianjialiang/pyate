@@ -6,14 +6,14 @@ error (and warning) so a broken config can be fixed in one pass.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 from .loader import LoadedSession
-from .models import FlowNode
+from .models import FlowNode, Limit
 
-__all__ = ["ValidationReport", "validate_session", "iter_flow_items", "resolve_pattern_path"]
+__all__ = ["ValidationReport", "iter_flow_items", "resolve_pattern_path", "validate_session"]
 
 
 @dataclass
@@ -82,9 +82,9 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
         report.error(
             f"channel_map: {site_count} sites requested but tester.num_sites_max={tester.num_sites_max}"
         )
-    power_owner: dict[int, str] = {}
+    power_owner: dict[tuple[str, int], str] = {}
     for site in range(1, site_count + 1):
-        used: dict[int, str] = {}
+        used: dict[tuple[str, int], str] = {}
         for pin, (entry, bit) in expanded.items():
             channel = entry.channel_of(site, bit)
             if channel is None:
@@ -97,20 +97,21 @@ def _validate_channels(session: LoadedSession, report: ValidationReport) -> None
                     f"channel_map: pin '{pin}' site {site} channel {channel} outside "
                     f"1..{pool} ({kind})"
                 )
-            if channel in used:
+            resource = (kind, channel)
+            if resource in used:
                 report.error(
                     f"channel_map: channel {channel} used twice on site {site} "
-                    f"('{used[channel]}' and '{pin}')"
+                    f"('{used[resource]}' and '{pin}')"
                 )
-            used[channel] = pin
-            if entry.type == "power":
+            used[resource] = pin
+            if resource:
                 owner = f"{pin} site {site}"
-                previous = power_owner.get(channel)
+                previous = power_owner.get(resource)
                 if previous is not None:
                     report.error(
-                        f"channel_map: DPS channel {channel} used by {previous} and {owner}"
+                        f"channel_map: {kind} channel {channel} used by {previous} and {owner}"
                     )
-                power_owner[channel] = owner
+                power_owner[resource] = owner
 
     if session.loadboard is not None:
         board = session.loadboard
@@ -140,14 +141,17 @@ def _validate_levels_timing(session: LoadedSession, report: ValidationReport) ->
 
 
 def _validate_limits(session: LoadedSession, report: ValidationReport) -> None:
-    seen: dict[tuple[int, str], str] = {}
+    seen: dict[tuple[int, str], list[Limit]] = {}
     for limit in session.limits.limits:
         key = (limit.test_num, limit.stage)
-        if key in seen:
+        if any(max(limit.temp_min, previous.temp_min) <= min(limit.temp_max, previous.temp_max)
+               for previous in seen.get(key, [])):
             report.error(
-                f"limits: test_num {limit.test_num} (stage {limit.stage}) defined more than once"
+                f"limits: test_num {limit.test_num} (stage {limit.stage}) has overlapping temperature ranges"
             )
-        seen[key] = limit.name
+        seen.setdefault(key, []).append(limit)
+        if limit.temp_min > limit.temp_max:
+            report.error(f"limits: test_num {limit.test_num}: temp_min must be <= temp_max")
         if limit.lo is not None and limit.hi is not None and limit.lo > limit.hi:
             report.error(f"limits: test_num {limit.test_num}: lo ({limit.lo}) > hi ({limit.hi})")
 
@@ -174,6 +178,38 @@ def _validate_binning(session: LoadedSession, report: ValidationReport) -> None:
             report.error(f"binning: bin_priority references undefined soft bin {sbin}")
 
 
+def _validate_flow_structure(nodes: list[FlowNode], session: LoadedSession,
+                             report: ValidationReport, path: str) -> None:
+    """Check control nodes even when their branch is never selected at runtime."""
+    import ast
+
+    from ..engine.flow import SafeExpression
+    allowed_calls = {"abs", "min", "max", "round", "len", "int", "float", "bool", "str",
+                     "result", "value", "passed", "var", "get"}
+    bins = {b.sbin for b in session.binning.soft_bins}
+    for index, node in enumerate(nodes):
+        location = f"{path}[{index}]"
+        if node.goto_bin is not None and node.goto_bin not in bins:
+            report.error(f"{location}.goto_bin: undefined bin {node.goto_bin}")
+        if node.branch is not None:
+            try:
+                SafeExpression(node.branch.if_)
+                for expression in ast.walk(ast.parse(node.branch.if_, mode="eval")):
+                    if isinstance(expression, ast.Call) and (
+                        not isinstance(expression.func, ast.Name) or expression.func.id not in allowed_calls
+                    ):
+                        raise ValueError("call target is not an allowed flow function")
+            except (ValueError, SyntaxError) as exc:
+                report.error(f"{location}.branch.if: {exc}")
+            _validate_flow_structure(node.branch.then, session, report, location + ".branch.then")
+            _validate_flow_structure(node.branch.else_, session, report, location + ".branch.else")
+        if node.loop is not None:
+            if not 0 <= node.loop.count <= 1_000_000:
+                report.error(f"{location}.loop.count: must be in 0..1000000")
+            _validate_flow_structure(node.loop.items, session, report, location + ".loop.items")
+        _validate_flow_structure(node.items, session, report, location + ".items")
+
+
 def _validate_program(session: LoadedSession, report: ValidationReport) -> None:
     if session.run.stage not in session.program.flows:
         report.error(
@@ -182,6 +218,7 @@ def _validate_program(session: LoadedSession, report: ValidationReport) -> None:
         )
         return
     for stage, nodes in session.program.flows.items():
+        _validate_flow_structure(nodes, session, report, f"program[{stage}]")
         test_nums: dict[int, str] = {}
         for node in iter_flow_items(nodes):
             key = node.test_num
@@ -192,6 +229,19 @@ def _validate_program(session: LoadedSession, report: ValidationReport) -> None:
                     f"('{test_nums[key]}' and '{node.item}')"
                 )
             test_nums[key] = str(node.item)
+            try:
+                from ..testitems.registry import create_testitem
+                item = create_testitem(str(node.item), key, node.params)
+                if getattr(item.params, "requires_limits", False):
+                    from ..testitems.base import LimitsTable
+                    if LimitsTable(session.limits).lookup(key, stage, session.temperature()) is None:
+                        report.error(f"program[{stage}].{node.item}: no matching required limit for test {key}")
+            except Exception as exc:
+                report.error(f"program[{stage}].{node.item}.params: {exc}")
+            if node.on_fail and node.on_fail.bin is not None and node.on_fail.bin not in {
+                b.sbin for b in session.binning.soft_bins
+            }:
+                report.error(f"program[{stage}].{node.item}.on_fail.bin: undefined bin {node.on_fail.bin}")
             pattern = node.params.get("pattern")
             if pattern:
                 path = resolve_pattern_path(session, str(pattern))
@@ -266,6 +316,8 @@ def _validate_run(session: LoadedSession, report: ValidationReport) -> None:
 def validate_session(session: LoadedSession) -> ValidationReport:
     """Run every cross-file check and return the aggregated report."""
     report = ValidationReport()
+    if session.run.parallel_mode == "process":
+        report.error("run.parallel_mode=process: site processes are not implemented; use thread or sequential")
     if not session.levels.sets or not session.timing.sets:
         report.error("levels/timing: at least one set is required")
     _validate_channels(session, report)

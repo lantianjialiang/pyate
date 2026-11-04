@@ -23,7 +23,7 @@ from .report import aggregate_report
 from .retest import RetestConfig
 from .spec import BatchSpec, JobSpec
 
-__all__ = ["JobResult", "BatchSummary", "BatchRunner", "run_job"]
+__all__ = ["BatchRunner", "BatchSummary", "JobResult", "run_job"]
 
 _LOG = logging.getLogger("pyate.batch")
 
@@ -88,7 +88,7 @@ class JobResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "JobResult":
+    def from_dict(cls, data: dict[str, Any]) -> JobResult:
         """Rebuild a result from its serialised form."""
         bins = {int(k): int(v) for k, v in (data.get("bin_counts") or {}).items()}
         return cls(
@@ -215,9 +215,10 @@ def render_markdown(data: dict[str, Any]) -> str:
         lines += ["", "## Capability (Cpk)", "",
                   "| test | name | n | mean | sigma | cpk |", "|---|---|---|---|---|---|"]
         for row in caps:
+            cpk = "N/A" if row['cpk'] is None else f"{row['cpk']:.3f}"
             lines.append(
                 f"| {row['test_num']} | {row.get('name', '')} | {row['count']} | "
-                f"{row['mean']:.4g} | {row['sigma']:.4g} | {row['cpk']:.3f} |"
+                f"{row['mean']:.4g} | {row['sigma']:.4g} | {cpk} |"
             )
     return "\n".join(lines) + "\n"
 
@@ -254,6 +255,7 @@ def run_job(
         sinks=sinks,
         retest_bins=policy.bins,
         max_retries=policy.max_retries,
+        retest_policy=policy,
         resume=False,
     )
     summary = controller.run()
@@ -298,12 +300,13 @@ def _job_entry(payload: dict[str, Any]) -> dict[str, Any]:
             payload.get("output_dir"),
             stage=payload.get("stage") or None,
             seed=payload.get("seed"),
+            retest=RetestConfig(**payload["retest"]) if payload.get("retest") else None,
         )
         result.job_id = payload["job_id"]
         result.labels = payload.get("labels") or {}
         result.overrides = payload.get("overrides") or {}
         return result.to_dict()
-    except Exception as exc:  # noqa: BLE001 - failure must not kill the pool
+    except Exception as exc:
         return {
             "job_id": payload.get("job_id", "?"),
             "status": JobStatus.FAILED.value,
@@ -334,7 +337,7 @@ class BatchRunner:
         self.events = events
         base = Path(output_dir) if output_dir is not None else Path(spec.output_dir)
         self.output_dir = base if base.is_absolute() else (spec.root / base).resolve()
-        self.retest = retest
+        self.retest = retest or RetestConfig.from_policy(spec.retest)
         self.seed = seed
         self.queue = JobQueue(self.job_specs)
         self._cancel = threading.Event()
@@ -345,6 +348,7 @@ class BatchRunner:
     def cancel(self) -> None:
         """Stop scheduling new jobs (running jobs finish normally)."""
         self._cancel.set()
+        self.queue.abort_pending()
 
     @property
     def cancelled(self) -> bool:
@@ -404,8 +408,12 @@ class BatchRunner:
         futures = {}
         while True:
             if self._cancel.is_set():
-                break
-            job = self.queue.claim()
+                self.queue.abort_pending()
+                for future, job in list(futures.items()):
+                    if future.cancel():
+                        job.transition(JobStatus.ABORTED)
+                        futures.pop(future)
+            job = self.queue.claim() if not self.cancelled and len(futures) < self.spec.max_workers else None
             if job is not None:
                 job.output_dir = str(self.job_dir(job))
                 payload = {
@@ -415,6 +423,8 @@ class BatchRunner:
                     "output_dir": job.output_dir,
                     "labels": job.spec.labels,
                     "seed": self.seed,
+                    "retest": {"bins": self.retest.bins, "on": self.retest.on,
+                               "keep": self.retest.keep, "max_retries": self.retest.max_retries},
                 }
                 futures[pool.submit(_job_entry, payload)] = job
                 continue
@@ -431,7 +441,7 @@ class BatchRunner:
     def _apply_pool_result(self, job: Job, future: Any) -> None:
         try:
             data = future.result()
-        except Exception as exc:  # noqa: BLE001 - isolate worker crashes
+        except Exception as exc:
             job.transition(JobStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
             self._publish(EventKind.ERROR, {"batch": self.batch_id, "job": job.id,
                                             "error": job.error})
@@ -465,7 +475,7 @@ class BatchRunner:
                 retest=self.retest,
                 seed=self.seed,
             )
-        except Exception as exc:  # noqa: BLE001 - a failing job must not stop the batch
+        except Exception as exc:
             _LOG.exception("job %s failed", job.id)
             job.transition(JobStatus.FAILED, error=f"{type(exc).__name__}: {exc}")
             self._publish(EventKind.ERROR, {"batch": self.batch_id, "job": job.id,

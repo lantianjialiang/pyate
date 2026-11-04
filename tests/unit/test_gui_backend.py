@@ -9,15 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from pyate.api import Session, normalize_shmoo, run_shmoo, shmoo_csv
-from pyate.api import EventBus, EventKind
+from conftest import CONFIGS, CP_SESSION, FT_SESSION
+from pyate.api import EventBus, EventKind, Session, normalize_shmoo, run_shmoo, shmoo_csv
 from pyate.config.loader import load_session
 from pyate.config.models import FlowNode
 from pyate.engine.controller import RunController
 from pyate.engine.events import EventBus as EngineBus
 from pyate.gui.viewmodels.run_vm import RunViewModel
-
-from conftest import CONFIGS, CP_SESSION, FT_SESSION
 
 
 def test_normalize_shmoo_accepts_the_test_item_payload() -> None:

@@ -16,7 +16,7 @@ API_VERSION = "1.0"
 hookspec = pluggy.HookspecMarker(PROJECT_NAME)
 hookimpl = pluggy.HookimplMarker(PROJECT_NAME)
 
-__all__ = ["PROJECT_NAME", "API_VERSION", "hookspec", "hookimpl", "PyateSpec"]
+__all__ = ["API_VERSION", "PROJECT_NAME", "PyateSpec", "hookimpl", "hookspec"]
 
 
 class PyateSpec:
@@ -25,6 +25,7 @@ class PyateSpec:
     @hookspec
     def pyate_api_version(self) -> str:
         """Return the plugin's supported pyate plugin API version (e.g. ``"1.0"``)."""
+        return API_VERSION
 
     @hookspec
     def pyate_register(self, registry: Any) -> None:

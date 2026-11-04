@@ -7,11 +7,13 @@ without surprises.
 
 from __future__ import annotations
 
+import math
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
-__all__ = ["TestResult", "SiteContext", "PartResult", "RunContext", "TouchdownInfo"]
+__all__ = ["PartResult", "RunContext", "SiteContext", "TestResult", "TouchdownInfo"]
 
 
 @dataclass
@@ -35,6 +37,10 @@ class TestResult:
     pin: str | None = None
     kind: str = "PTR"  # PTR | FTR | MPR
     skipped: bool = False
+    execution_status: str = "completed"
+    measurement_valid: bool = True
+    functional_passed: bool | None = None
+    limit_passed: bool | None = None
     # functional-test bookkeeping (FTR)
     cycle_cnt: int = 0
     rel_vadr: int = 0
@@ -45,24 +51,36 @@ class TestResult:
     timestamp: float = field(default_factory=time.time)
     extra: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.passed and self.functional_passed is None:
+            self.functional_passed = False
+
     # ------------------------------------------------------------------ api
-    def judge(self, lo: float | None = None, hi: float | None = None) -> "TestResult":
+    def judge(self, lo: float | None = None, hi: float | None = None) -> TestResult:
         """Apply limits in place (``None`` means unbounded)."""
         self.lo_limit = lo
         self.hi_limit = hi
         if self.skipped:
             return self
+        valid_execution = self.execution_status == "completed" and self.measurement_valid
         if self.value is None:
             # A parameter test without a value can only pass when it carries an
             # explicit functional verdict.
-            self.passed = bool(self.extra.get("force_pass", False))
+            self.passed = valid_execution and self.functional_passed is not False and bool(
+                self.extra.get("force_pass", self.functional_passed is True)
+            )
             return self
-        self.passed = (lo is None or self.value >= lo) and (hi is None or self.value <= hi)
+        self.measurement_valid = self.measurement_valid and math.isfinite(self.value)
+        self.limit_passed = self.measurement_valid and (
+            (lo is None or self.value >= lo) and (hi is None or self.value <= hi)
+        )
+        self.passed = valid_execution and self.functional_passed is not False and self.limit_passed
         return self
 
-    def fail(self, code: int = 1) -> "TestResult":
+    def fail(self, code: int = 1) -> TestResult:
         """Force a fail verdict with an optional fail code."""
         self.passed = False
+        self.functional_passed = False
         self.fail_code = code
         return self
 
@@ -72,7 +90,7 @@ class TestResult:
             "test_num": self.test_num,
             "test_name": self.test_name,
             "site": self.site,
-            "value": self.value,
+            "value": self.value if self.value is None or math.isfinite(self.value) else None,
             "unit": self.unit,
             "lo_limit": self.lo_limit,
             "hi_limit": self.hi_limit,
@@ -81,6 +99,10 @@ class TestResult:
             "pin": self.pin,
             "kind": self.kind,
             "skipped": self.skipped,
+            "execution_status": self.execution_status,
+            "measurement_valid": self.measurement_valid,
+            "functional_passed": self.functional_passed,
+            "limit_passed": self.limit_passed,
             "cycle_cnt": self.cycle_cnt,
             "rel_vadr": self.rel_vadr,
             "num_fail": self.num_fail,
@@ -92,7 +114,7 @@ class TestResult:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TestResult":
+    def from_dict(cls, data: dict[str, Any]) -> TestResult:
         """Inverse of :meth:`to_dict`."""
         payload = dict(data)
         payload["fail_pins"] = tuple(payload.get("fail_pins") or ())
@@ -207,7 +229,23 @@ class PartResult:
         }
         if include_results:
             data["results"] = [r.to_dict() for r in self.results]
+        if "previous_attempts" in self.extra:
+            data["extra"]["previous_attempts"] = [
+                p.to_dict(include_results=True) for p in self.extra["previous_attempts"]
+            ]
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PartResult:
+        """Restore a persisted part including its complete attempt history."""
+        payload = dict(data)
+        payload["results"] = [TestResult.from_dict(r) for r in payload.get("results", [])]
+        payload["extra"] = dict(payload.get("extra", {}))
+        if "previous_attempts" in payload["extra"]:
+            payload["extra"]["previous_attempts"] = [
+                cls.from_dict(p) for p in payload["extra"]["previous_attempts"]
+            ]
+        return cls(**payload)
 
 
 @dataclass(frozen=True)

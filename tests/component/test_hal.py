@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import CONFIGS
+from pyate.config.loader import load_session
 from pyate.config.models import ChannelMapConfig, LevelsSet, TimingSet
 from pyate.dut.base import Defect
 from pyate.dut.models.counter import CounterModel
 from pyate.hal.base import HALError, NotConnected, OverCurrent, ResourceConflict, SiteResources
 from pyate.hal.simulated import SimulatedHAL, disconnect_all
 from pyate.pattern.parser import parse_pattern_text
-
-from conftest import CONFIGS
-from pyate.config.loader import load_session
 
 
 @pytest.fixture()

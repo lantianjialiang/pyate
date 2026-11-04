@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import math
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QToolTip, QWidget
 
 from ..api import normalize_shmoo, shmoo_csv
 from .theme import bins_colors, canvas_colors
 
 __all__ = [
-    "WaferMapWidget", "BinBarWidget", "ShmooWidget",
-    "HistogramWidget", "TrendWidget", "ProbabilityWidget", "TrayWidget", "PatternCompareWidget",
+    "BinBarWidget",
+    "HistogramWidget",
+    "PatternCompareWidget",
+    "ProbabilityWidget",
+    "ShmooWidget",
+    "TrayWidget",
+    "TrendWidget",
+    "WaferMapWidget",
 ]
 
 
@@ -53,7 +60,7 @@ class WaferMapWidget(QWidget):
         return bool(self.grab().save(path))
 
     # ------------------------------------------------------------------ paint
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         palette = canvas_colors()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -117,7 +124,7 @@ class WaferMapWidget(QWidget):
         notch.closeSubpath()
         return path.subtracted(notch)
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         point = event.position()
         for rect, x, y, soft_bin in self._hits:
             if rect.contains(point):
@@ -132,7 +139,7 @@ class WaferMapWidget(QWidget):
                 return
         QToolTip.hideText()
 
-    def leaveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def leaveEvent(self, event: Any) -> None:
         QToolTip.hideText()
         super().leaveEvent(event)
 
@@ -151,7 +158,7 @@ class BinBarWidget(QWidget):
         self._rows = list(rows)
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))
@@ -227,7 +234,7 @@ class ShmooWidget(QWidget):
         }), encoding="utf-8")
         return True
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))
@@ -274,7 +281,7 @@ class ShmooWidget(QWidget):
         painter.drawText(QRectF(self.width() - 52, 2, 48, 14), Qt.AlignLeft,
                          f"fail  {self._rate:.0f}%")
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         cell = self._cell_at(event.position())
         if cell is None:
             QToolTip.hideText()
@@ -287,7 +294,7 @@ class ShmooWidget(QWidget):
             self,
         )
 
-    def leaveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def leaveEvent(self, event: Any) -> None:
         QToolTip.hideText()
         super().leaveEvent(event)
 
@@ -376,7 +383,7 @@ class _StatChart(QWidget):
         self._hi = None if hi is None else float(hi)
         self.update()
 
-    def leaveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def leaveEvent(self, event: Any) -> None:
         QToolTip.hideText()
         super().leaveEvent(event)
 
@@ -448,7 +455,7 @@ class HistogramWidget(_StatChart):
         self._bins = list(bins)
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
@@ -490,7 +497,7 @@ class HistogramWidget(_StatChart):
             painter.setPen(QColor(palette["muted"]))
             painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, note)
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         x = event.position().x()
         text = self._limit_hit(x, event.position().y(), vertical=True)
         if not text:
@@ -516,7 +523,7 @@ class TrendWidget(_StatChart):
         self._values = [float(value) for value in values]
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
@@ -556,7 +563,7 @@ class TrendWidget(_StatChart):
             caption = f"{caption}    {note}"
         painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, caption)
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         x = event.position().x()
         y = event.position().y()
         text = self._limit_hit(x, y, vertical=False)
@@ -588,7 +595,7 @@ class ProbabilityWidget(_StatChart):
         self._points = [(float(x), float(z)) for x, z in points]
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         self._clear_hits()
         palette = canvas_colors()
         painter = QPainter(self)
@@ -643,7 +650,7 @@ class ProbabilityWidget(_StatChart):
         if note:
             painter.drawText(QRectF(left, 1, width, 14), Qt.AlignRight, note)
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         x = event.position().x()
         y = event.position().y()
         text = self._limit_hit(x, y, vertical=True)
@@ -692,7 +699,7 @@ class TrayWidget(QWidget):
         self._view = dict(view or {})
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))
@@ -790,7 +797,7 @@ class TrayWidget(QWidget):
             painter.setPen(QColor("#ffffff"))
             painter.drawText(rect, Qt.AlignCenter, f"H{hard} {pocket.get('count')}")
 
-    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def mouseMoveEvent(self, event: Any) -> None:
         point = event.position()
         text = ""
         for rect, label in self._hits:
@@ -828,7 +835,7 @@ class PatternCompareWidget(QWidget):
         self._fail_pins = {str(pin) for pin in (fail_pins or [])}
         self.update()
 
-    def paintEvent(self, event: Any) -> None:  # noqa: N802 - Qt naming
+    def paintEvent(self, event: Any) -> None:
         palette = canvas_colors()
         painter = QPainter(self)
         painter.fillRect(self.rect(), QColor(palette["bg"]))

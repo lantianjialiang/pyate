@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from pyate.api import Event
 from pyate.config.models import HandlerConfig, SiteLayout
 from pyate.engine.metrics import EquipmentStats
@@ -61,6 +63,22 @@ def test_full_cadence_is_oee_one_and_a_tail_or_jam_lowers_it() -> None:
     assert jammed.quality == 0.75
     assert jammed.oee == 0.5 * 1.0 * 0.75
     assert jammed.uph < jammed.gross_uph
+
+
+def test_configured_ideal_cadence_is_not_replaced_by_a_fast_fail() -> None:
+    model = EquipmentStats(sites=4, ideal_test_ms=100.0)
+    model.add_touchdown(tested=4, passed=0, test_ms=1.0, index_ms=50.0)
+    model.add_touchdown(tested=4, passed=4, test_ms=200.0, index_ms=50.0)
+    assert model.ideal_test_ms == 100.0
+    assert model.theoretical_uph == pytest.approx(4 * 3_600_000 / 150)
+    assert model.to_dict()['ideal_source'] == 'configured'
+    assert EquipmentStats(sites=4).to_dict()['ideal_source'] == 'observed_minimum'
+
+
+@pytest.mark.parametrize('value', [0, -1, float('inf'), float('nan')])
+def test_invalid_ideal_cadence_is_rejected(value) -> None:
+    with pytest.raises(ValueError):
+        EquipmentStats(sites=4, ideal_test_ms=value)
 
 
 def test_tray_view_picks_a_slot_into_its_hard_bin() -> None:

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import pytest
 
+from conftest import CONFIGS
 from pyate.config.models import LevelsSet, TimingSet
-from pyate.dut.models.counter import CounterModel
 from pyate.dut.base import Defect
+from pyate.dut.models.counter import CounterModel
 from pyate.pattern.engine import PatternEngine
 from pyate.pattern.generators import (
     counter_loop_pattern,
@@ -14,11 +15,8 @@ from pyate.pattern.generators import (
     generate,
     shift_pattern,
 )
-from pyate.pattern.model import LoopStartOp, ParseError, VectorOp
+from pyate.pattern.model import LoopStartOp, ParseError
 from pyate.pattern.parser import load_pattern, parse_pattern_text
-
-from conftest import CONFIGS
-
 
 SIMPLE = """
 pattern simple;
@@ -135,7 +133,7 @@ def test_loop_pattern_runs_to_max_cycles() -> None:
     dut = CounterModel({"bits": 4}, None)
     dut.power(3.3)
     engine = PatternEngine(dut, LevelsSet(name="lv"), TimingSet(name="t"))
-    result = engine.run(pattern, max_cycles=200)
+    result = engine.run(pattern, max_cycles=200, completion_mode="window")
     assert result.passed
     assert 0 < result.cycles <= 200
 

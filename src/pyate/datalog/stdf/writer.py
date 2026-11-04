@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import gzip
+import math
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO, Iterable
+from typing import Any, BinaryIO
 
+from ..._files import replace_atomic
 from ...engine.context import PartResult, TestResult
 from .records import (
     ATR,
@@ -19,6 +21,7 @@ from .records import (
     MRR,
     PCR,
     PIR,
+    PMR,
     PRR,
     PTR,
     SBR,
@@ -31,7 +34,7 @@ from .records import (
     encode_record,
 )
 
-__all__ = ["StdfWriter", "StdfSink", "PartFlags", "TestFlags"]
+__all__ = ["PartFlags", "StdfSink", "StdfWriter", "TestFlags"]
 
 HEAD_ALL = 1
 SITE_ALL = 255
@@ -46,10 +49,11 @@ class PartFlags:
 
     PASS = 0x00
     TESTED = 0x00
-    NOT_TESTED = 0x01
-    FAIL = 0x02
-    RETEST = 0x04
-    ABNORMAL = 0x08
+    NOT_TESTED = 0x10
+    FAIL = 0x08
+    RETEST = 0x01  # supersede the preceding sequence with the same PART_ID
+    RETEST_XY = 0x02
+    ABNORMAL = 0x04
 
 
 class TestFlags:
@@ -57,9 +61,11 @@ class TestFlags:
 
     PASS = 0x00
     ALARM = 0x01
-    FAIL = 0x02
-    NOT_EXECUTED = 0x08
-    INCOMPLETE = 0x10
+    FAIL = 0x80
+    INVALID = 0x02
+    TIMEOUT = 0x08
+    NOT_EXECUTED = 0x10
+    INCOMPLETE = 0x20
 
 
 @dataclass
@@ -75,7 +81,10 @@ class _TestStats:
     exec_count: int = 0
     fail_count: int = 0
     total_ms: float = 0.0
-    values: list[float] = field(default_factory=list)
+    minimum: float | None = None
+    maximum: float | None = None
+    sums: float = 0.0
+    squares: float = 0.0
 
 
 class StdfWriter:
@@ -86,7 +95,7 @@ class StdfWriter:
         path: str | Path,
         *,
         byte_order: str = "little",
-        cpu_type: int = 2,
+        cpu_type: int | None = None,
         gzip_output: bool = False,
         write_wcr: bool = False,
         write_fail_pin: bool = False,
@@ -96,14 +105,19 @@ class StdfWriter:
         hand_type: str = "PROBER",
         card_id: str = "CARD1",
         load_id: str = "LOAD1",
+        pin_maps: dict[int, dict[str, int]] | None = None,
     ) -> None:
+        expected_cpu = 2 if byte_order == "little" else 1
+        if byte_order not in ("little", "big") or cpu_type not in (None, expected_cpu):
+            raise ValueError("CPU_TYPE must match the STDF byte order")
         self.path = Path(str(path) + (".gz" if gzip_output and not str(path).endswith(".gz") else ""))
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        raw: BinaryIO = open(self.path, "wb")
-        self._handle: BinaryIO = gzip.GzipFile(fileobj=raw, mode="wb") if gzip_output else raw
+        self._pending_path = self.path.with_name(self.path.name + ".partial")
+        raw: BinaryIO = open(self._pending_path, "wb")
+        self._handle: BinaryIO | gzip.GzipFile = gzip.GzipFile(fileobj=raw, mode="wb") if gzip_output else raw
         self._raw = raw
         self.endian = "little" if byte_order == "little" else "big"
-        self.cpu_type = cpu_type
+        self.cpu_type = expected_cpu
         self.wcr_enabled = bool(write_wcr)
         self.write_fail_pin = write_fail_pin
         self.site_count = site_count
@@ -112,6 +126,10 @@ class StdfWriter:
         self.hand_type = hand_type
         self.card_id = card_id
         self.load_id = load_id
+        self.pin_maps = pin_maps or {}
+        self.pin_indices = {(site, pin): index for index, (site, pin) in enumerate(
+            [(site, pin) for site in sorted(self.pin_maps) for pin in sorted(self.pin_maps[site])], 1
+        )}
         self.start_t = int(time.time()) & 0xFFFFFFFF
         self._sites = {site: _SiteStats() for site in range(1, site_count + 1)}
         self._tests: dict[tuple[int, int, str, str], _TestStats] = {}
@@ -178,6 +196,10 @@ class StdfWriter:
             "CABL_TYP": "", "CABL_ID": "", "CONT_TYP": "", "CONT_ID": "",
             "LASR_TYP": "", "LASR_ID": "", "EXTR_TYP": "", "EXTR_ID": "",
         })
+        for (site, pin), index in self.pin_indices.items():
+            self._write(PMR, {"PMR_INDX": index, "CHAN_TYP": 0,
+                              "CHAN_NAM": str(self.pin_maps[site][pin]), "PHY_NAM": pin,
+                              "LOG_NAM": pin, "HEAD_NUM": HEAD_ALL, "SITE_NUM": site})
 
     def write_wir(self, wafer_id: str) -> None:
         """Start a wafer (CP)."""
@@ -193,7 +215,8 @@ class StdfWriter:
         die_h_mm: float | None = None,
         center_x: int = 0,
         center_y: int = 0,
-        wafer_units: int = 2,
+        wafer_units: int = 3,
+        notch: str = "bottom",
     ) -> None:
         """Write the optional WCR wafer configuration record.
 
@@ -208,9 +231,9 @@ class StdfWriter:
             "DIE_HT": float(die_h_mm or 10.0),
             "DIE_WID": float(die_w_mm or 10.0),
             "WF_UNITS": int(wafer_units),
-            "WF_FLAT": "N",
+            "WF_FLAT": {"bottom": "D", "top": "U", "left": "L", "right": "R"}[notch],
             "CENTER_X": int(center_x), "CENTER_Y": int(center_y),
-            "POS_X": "L", "POS_Y": "U",
+            "POS_X": "R", "POS_Y": "U",
         })
 
     # ------------------------------------------------------------------- part
@@ -232,6 +255,12 @@ class StdfWriter:
         if not result.passed:
             stats.fail_count += 1
         stats.total_ms += result.test_time_ms
+        if result.kind == "PTR" and result.value is not None and math.isfinite(result.value):
+            value = float(result.value)
+            stats.minimum = value if stats.minimum is None else min(stats.minimum, value)
+            stats.maximum = value if stats.maximum is None else max(stats.maximum, value)
+            stats.sums += value
+            stats.squares += value * value
         if result.kind == "FTR":
             self._write_ftr(result)
         else:
@@ -241,7 +270,11 @@ class StdfWriter:
         if result.skipped:
             return TestFlags.NOT_EXECUTED
         flags = TestFlags.PASS if result.passed else TestFlags.FAIL
+        if result.kind != "FTR" and (result.value is None or not result.measurement_valid):
+            flags |= TestFlags.INVALID
         if result.extra.get("timeout"):
+            flags |= TestFlags.TIMEOUT
+        if result.execution_status != "completed":
             flags |= TestFlags.INCOMPLETE
         return flags
 
@@ -264,17 +297,15 @@ class StdfWriter:
             "C_RESFMT": "", "C_LLMFMT": "", "C_HLMFMT": "",
             "LO_SPEC": lo, "HI_SPEC": hi,
         })
-        key = (result.site, result.test_num, "PTR", result.test_name)
-        stats = self._tests.get(key)
-        if stats is not None and result.value is not None:
-            stats.values.append(float(result.value))
         self._write(PTR, common)
 
     def _write_ftr(self, result: TestResult) -> None:
         fail_pin: Any = None
         if self.write_fail_pin and result.fail_pins:
-            width = max(len(result.fail_pins), 8)
-            fail_pin = (list(range(len(result.fail_pins))), width)
+            indices = [self.pin_indices[(result.site, pin)] for pin in result.fail_pins
+                       if (result.site, pin) in self.pin_indices]
+            if indices:
+                fail_pin = (indices, max(self.pin_indices.values()) + 1)
         rsl_text = ""
         if not result.passed:
             first = result.extra.get("first_fail_cycle")
@@ -306,7 +337,7 @@ class StdfWriter:
             flags |= PartFlags.RETEST
         if part.extra.get("error"):
             flags |= PartFlags.ABNORMAL
-        elapsed = int(max(0, part.test_time_ms / 1000.0))
+        elapsed = int(max(0, round(part.test_time_ms)))
         first_fail = next((r for r in part.results if not r.passed and not r.skipped), None)
         text = ""
         if first_fail is not None:
@@ -338,18 +369,16 @@ class StdfWriter:
                         soft_bin_pass: dict[int, str] | None = None) -> None:
         """Write TSR, HBR, SBR and PCR records."""
         for (site, test_num, kind, name), stats in sorted(self._tests.items()):
-            count = max(1, len(stats.values))
-            values = stats.values
             self._write(TSR, {
                 "HEAD_NUM": HEAD_ALL, "SITE_NUM": site, "TEST_TYP": "F" if kind == "FTR" else "P",
                 "TEST_NUM": test_num, "EXEC_CNT": stats.exec_count,
                 "FAIL_CNT": stats.fail_count, "ALRM_CNT": 0, "TEST_NAM": name,
                 "SEQ_NAME": "", "TEST_LBL": "", "OPT_FLAG": 0,
                 "TEST_TIM": stats.total_ms / 1000.0,
-                "TEST_MIN": min(values) if values else 0.0,
-                "TEST_MAX": max(values) if values else 0.0,
-                "TST_SUMS": sum(values) if values else 0.0,
-                "TST_SQRS": sum(v * v for v in values) if values else 0.0,
+                "TEST_MIN": stats.minimum or 0.0,
+                "TEST_MAX": stats.maximum or 0.0,
+                "TST_SUMS": stats.sums,
+                "TST_SQRS": stats.squares,
             })
         for bin_num, count in sorted(self._hard_bins.items()):
             self._write(HBR, {
@@ -368,11 +397,11 @@ class StdfWriter:
         total_parts = sum(stats.parts for stats in self._sites.values())
         total_good = sum(stats.good for stats in self._sites.values())
         total_retest = sum(stats.retests for stats in self._sites.values())
-        for site, stats in sorted(self._sites.items()):
+        for site, site_stats in sorted(self._sites.items()):
             self._write(PCR, {
-                "HEAD_NUM": HEAD_ALL, "SITE_NUM": site, "PART_CNT": stats.parts,
-                "RTST_CNT": stats.retests, "ABRT_CNT": stats.aborts,
-                "GOOD_CNT": stats.good, "FUNC_CNT": 0,
+                "HEAD_NUM": HEAD_ALL, "SITE_NUM": site, "PART_CNT": site_stats.parts,
+                "RTST_CNT": site_stats.retests, "ABRT_CNT": site_stats.aborts,
+                "GOOD_CNT": site_stats.good, "FUNC_CNT": 0,
             })
         self._write(PCR, {
             "HEAD_NUM": 255, "SITE_NUM": SITE_ALL, "PART_CNT": total_parts,
@@ -407,9 +436,10 @@ class StdfWriter:
             self._raw.close()
         except Exception:  # pragma: no cover
             pass
+        replace_atomic(self._pending_path, self.path)
         return self.path
 
-    def __enter__(self) -> "StdfWriter":
+    def __enter__(self) -> StdfWriter:
         return self
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
@@ -470,6 +500,9 @@ class StdfSink:
             hand_type="PROBER" if kind == "wafer" else "HANDLER",
             card_id=getattr(self.session.loadboard, "board_id", "CARD1")
             if getattr(self.session, "loadboard", None) else "CARD1",
+            pin_maps={site: {pin: entry.channel_of(site, bit) for pin, (entry, bit)
+                             in self.session.channel_map.expand().items()}
+                      for site in range(1, self.site_count + 1)},
         )
         self.path = self.writer.path
         self.writer.write_atr(f"pyate run {self.session.path}")
@@ -489,9 +522,12 @@ class StdfSink:
             wafer = getattr(self.session, "wafer", None)
             self.writer.write_wcr_record(
                 wafer_size_mm=getattr(wafer, "diameter_mm", None),
-                die_w_mm=getattr(wafer, "die_w_mm", None),
-                die_h_mm=getattr(wafer, "die_h_mm", None),
-                wafer_units=2,
+                die_w_mm=wafer.die_size_mm[0] if wafer else None,
+                die_h_mm=wafer.die_size_mm[1] if wafer else None,
+                center_x=wafer.center_die[0] if wafer else 0,
+                center_y=wafer.center_die[1] if wafer else 0,
+                notch=wafer.notch if wafer else "bottom",
+                wafer_units=3,
             )
 
     def on_part(self, part: PartResult, unit: Any) -> None:
@@ -502,7 +538,6 @@ class StdfSink:
             # superseded retest attempts are written as their own PIR/PRR pair so
             # the STDF keeps the full test history (PART_FLG retest bit set).
             for previous in part.extra.get("previous_attempts", []) or []:
-                previous.retest = True
                 self.writer.start_part(previous)
                 for result in previous.results:
                     self.writer.write_result(result)

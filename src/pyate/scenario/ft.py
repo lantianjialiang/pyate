@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Iterator, Sequence
+import math
+from collections.abc import Iterator, Sequence
+from typing import Any
 
 from .base import UnitPlan
 from .handler_sim import HandlerSimulator
@@ -15,7 +17,7 @@ class FtScenario:
 
     name = "FT"
 
-    def __init__(self, session: object, sites: int, *, part_ids: Sequence[str] | None = None,
+    def __init__(self, session: Any, sites: int, *, part_ids: Sequence[str] | None = None,
                  trays: int | None = None, parts_per_tray: int | None = None,
                  seed: int | None = None) -> None:
         self.session = session
@@ -32,6 +34,8 @@ class FtScenario:
         )
         self.lot_id = getattr(lot, "lot_id", "LOT") if lot else "LOT"
         self.part_ids = list(part_ids) if part_ids is not None else None
+        if self.part_ids is not None:
+            self.trays = math.ceil(len(self.part_ids) / self.parts_per_tray)
 
     def _tray_parts(self, tray_index: int) -> list[str]:
         if self.part_ids is not None:
@@ -44,6 +48,7 @@ class FtScenario:
 
     def units(self) -> Iterator[UnitPlan]:
         """Yield one unit per tray."""
+        assert self.handler is not None
         for tray_index in range(self.trays):
             parts = self._tray_parts(tray_index)
             if not parts:
@@ -68,5 +73,6 @@ class FtScenario:
                     "tray_cols": cols,
                     "tray_rows": rows,
                     "tray_parts": len(parts),
+                    "touchdown_count": math.ceil(len(parts) / self.sites),
                 },
             )

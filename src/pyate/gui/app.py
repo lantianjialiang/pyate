@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-__all__ = ["main", "create_app", "create_window", "ensure_fonts", "application_icon"]
+__all__ = ["application_icon", "create_app", "create_window", "ensure_fonts", "main"]
 
 _ICON_NAME = "apple-touch-icon.png"
 
@@ -54,7 +54,7 @@ def icon_file() -> Path | None:
     return None
 
 
-def application_icon():  # noqa: ANN201 - Qt type is optional
+def application_icon():
     """The chip icon from ``pyate/public``."""
     from PySide6.QtGui import QIcon
 
@@ -64,7 +64,7 @@ def application_icon():  # noqa: ANN201 - Qt type is optional
     return QIcon(str(path))
 
 
-def create_app(argv: list[str] | None = None):  # noqa: ANN201 - Qt type is optional
+def create_app(argv: list[str] | None = None):
     """Create (or reuse) the ``QApplication``."""
     from PySide6.QtWidgets import QApplication
 
@@ -82,7 +82,7 @@ def create_app(argv: list[str] | None = None):  # noqa: ANN201 - Qt type is opti
     return app
 
 
-def create_window(session: str | Path | None = None, *, theme: str = "light"):  # noqa: ANN201
+def create_window(session: str | Path | None = None, *, theme: str = "light"):
     """Create the main window (also used by the headless smoke test)."""
     from .main_window import MainWindow
 

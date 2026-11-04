@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__all__ = ["DARK", "LIGHT", "stylesheet", "bins_colors", "canvas_colors", "set_theme"]
+__all__ = ["DARK", "LIGHT", "bins_colors", "canvas_colors", "set_theme", "stylesheet"]
 
 #: Bin colours (pass = green, fail = warm tones).  Chinese convention for *test*
 #: results is used here: green means good die, red/orange means failing die.
