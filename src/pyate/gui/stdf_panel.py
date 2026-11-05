@@ -60,7 +60,7 @@ class StdfPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.vm = RunViewModel()
-        self._keys: list[tuple[int, int | None, str | None]] = []
+        self._keys: list[tuple[int, int | None, str | None, str | None]] = []
         self._chips: list[tuple[QHBoxLayout, QWidget]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -88,6 +88,7 @@ class StdfPanel(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setAlternatingRowColors(True)
         configure_table(self.table)
+        self.table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         self.table.setColumnWidth(1, 140)
         self.table.setColumnWidth(4, 140)
         self.table.itemSelectionChanged.connect(self._paint)
@@ -202,6 +203,7 @@ class StdfPanel(QWidget):
                 passed=bool(row["passed"]),
                 wafer=str(row["wafer"] or ""),
                 part=str(row.get("part") or ""),
+                pin=str(row.get("pin") or ""),
                 lo=row.get("lo"),
                 hi=row.get("hi"),
             )
@@ -256,7 +258,7 @@ class StdfPanel(QWidget):
                 row.test_num, row.name,
                 -1 if row.site is None else row.site,
                 "" if row.wafer is None else row.wafer,
-                "" if row.part is None else row.part,
+                "" if row.pin is None else row.pin,
                 row.count, row.passed, row.failed,
                 row.mean, row.stdev, row.minimum, row.maximum,
                 row.lo, row.hi, row.cp, row.cpk,
@@ -266,7 +268,7 @@ class StdfPanel(QWidget):
             self.table.item(index, 0).setData(Qt.UserRole + 1, row.test_num)
             self.table.item(index, 2).setData(Qt.UserRole + 1, row.site)
             self.table.item(index, 3).setData(Qt.UserRole + 1, row.wafer)
-            self.table.item(index, 4).setData(Qt.UserRole + 1, row.part)
+            self.table.item(index, 4).setData(Qt.UserRole + 1, row.pin)
         if rows and not (0 <= selected < len(rows)):
             self.table.setCurrentCell(0, 0)
         self.row_count.setText(f"{len(rows)} rows")
@@ -279,7 +281,7 @@ class StdfPanel(QWidget):
         test_item = self.table.item(row_index, 0) if row_index >= 0 else None
         site_item = self.table.item(row_index, 2) if row_index >= 0 else None
         wafer_item = self.table.item(row_index, 3) if row_index >= 0 else None
-        part_item = self.table.item(row_index, 4) if row_index >= 0 else None
+        pin_item = self.table.item(row_index, 4) if row_index >= 0 else None
         if test_item is None:
             self.histogram.set_bins([])
             self.trend.set_values([])
@@ -293,11 +295,13 @@ class StdfPanel(QWidget):
         if site_id is not None:
             site_id = int(site_id)
         wafer_id = None if wafer_item is None else wafer_item.data(Qt.UserRole + 1)
-        part_id = None if part_item is None else part_item.data(Qt.UserRole + 1)
-        lo, hi = self.vm.limits_of(test_num, site_id, wafer_id, part_id)
+        pin_id = None if pin_item is None else pin_item.data(Qt.UserRole + 1)
+        if pin_id is not None:
+            pin_id = str(pin_id)
+        lo, hi = self.vm.limits_of(test_num, site_id, wafer_id, pin_id)
         self.histogram.set_limits(lo, hi)
         self.trend.set_limits(lo, hi)
         self.probability.set_limits(lo, hi)
-        self.histogram.set_bins(self.vm.histogram(test_num, site=site_id, wafer=wafer_id, part=part_id))
-        self.trend.set_values(self.vm.trend(test_num, site_id, wafer_id, part_id))
-        self.probability.set_points(self.vm.probability(test_num, site_id, wafer_id, part_id))
+        self.histogram.set_bins(self.vm.histogram(test_num, site=site_id, wafer=wafer_id, pin=pin_id))
+        self.trend.set_values(self.vm.trend(test_num, site_id, wafer_id, pin_id))
+        self.probability.set_points(self.vm.probability(test_num, site_id, wafer_id, pin_id))

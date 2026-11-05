@@ -118,6 +118,7 @@ PTR = RecordSpec("PTR", 15, 10, (
     ("OPT_FLAG", "B1"), ("RES_SCAL", "I1"), ("LLM_SCAL", "I1"), ("HLM_SCAL", "I1"),
     ("LO_LIMIT", "R4"), ("HI_LIMIT", "R4"), ("UNITS", "Cn"), ("C_RESFMT", "Cn"),
     ("C_LLMFMT", "Cn"), ("C_HLMFMT", "Cn"), ("LO_SPEC", "R4"), ("HI_SPEC", "R4"),
+    ("PIN_NUM", "U2"), ("C_NAM", "Cn"),
 ))
 FTR = RecordSpec("FTR", 15, 20, (
     ("TEST_NUM", "U4"), ("HEAD_NUM", "U1"), ("SITE_NUM", "U1"), ("TEST_FLG", "B1"),

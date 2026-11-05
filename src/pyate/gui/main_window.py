@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..api import ConfigProblem, EventBus, ItemRunReport, Session, run_item
+from ..api import ConfigProblem, EventBus, EventKind, ItemRunReport, Session, run_item
 from .app import application_icon
 from .panels import ConfigPanel, FlowPanel, LimitsPanel, PatternPanel, RunPanel
 from .plugin_panel import PluginPanel
@@ -194,17 +194,29 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ single item
     def run_single_item(self, request: dict[str, Any]) -> None:
-        """Run one flow item off the wafer and show it on the Run page."""
+        """Run one flow item off the wafer and show it on the Run page.
+
+        A run parked at a breakpoint does not touch the HAL, so the debug run is
+        allowed there too: it builds its own DUT and publishes on its own bus,
+        which keeps the paused run's data and STDF file clean.
+        """
         if self.session_path is None:
             self.status.setText("open a session first")
             self.flow_panel.set_item_status("open a session first")
             return
-        if self.run_vm.running:
+        paused = self.run_panel.is_paused()
+        if self.run_vm.running and not paused:
             self.flow_panel.set_item_status("stop the run first")
             QMessageBox.information(self, "single item", "stop the run before running a single item")
             return
         if request.get("clear"):
-            self.run_panel.clear_results()
+            if paused:
+                # clearing stops the live run, so its data is kept and the
+                # debug result is simply appended to it
+                self.run_panel.log_view.appendPlainText(
+                    f"run paused: {request.get('name')} results are appended to the run data")
+            else:
+                self.run_panel.clear_results()
         bus = self._item_bus()
         self.tabs.setCurrentWidget(self.run_panel)
         self.status.setText(f"running {request.get('name')} #{request.get('test_num')} ...")
@@ -214,11 +226,18 @@ class MainWindow(QMainWindow):
         self._item_thread.start()
 
     def _item_bus(self) -> EventBus:
-        """Event bus the Run page listens on (a finished run replaces it)."""
-        if self.run_vm.events is not self.events:
-            self.run_vm.detach()
-            self.run_vm.attach(self.events)
-        return self.events
+        """Bus a single item run publishes on, with the Run page listening.
+
+        A live run owns the view model and its bus also feeds the run's datalog
+        sinks, so the debug results must not go there - they would end up in the
+        run's STDF. They use a private bus that only the view model watches.
+        """
+        if self.run_vm.events is self.events:
+            return self.events
+        bus = EventBus()
+        bus.subscribe(EventKind.TEST_RESULT, self.run_vm.on_event)
+        bus.subscribe(EventKind.LOG, self.run_vm.on_event)
+        return bus
 
     def _item_worker(self, request: dict[str, Any], bus: EventBus) -> None:
         try:

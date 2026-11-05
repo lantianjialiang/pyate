@@ -281,24 +281,22 @@ class StdfWriter:
 
     def _write_ptr(self, result: TestResult) -> None:
         value = 0.0 if result.value is None else float(result.value)
-        common = {
+        # STDF has no "no limit" flag: an absent limit is written as the
+        # -1e38 / +1e38 sentinel. The record always carries every field up to
+        # C_NAM so that PIN_NUM survives even for unbounded measurements.
+        lo = -1.0e38 if result.lo_limit is None else float(result.lo_limit)
+        hi = 1.0e38 if result.hi_limit is None else float(result.hi_limit)
+        self._write(PTR, {
             "TEST_NUM": result.test_num, "HEAD_NUM": HEAD_ALL, "SITE_NUM": result.site,
             "TEST_FLG": self._test_flags(result), "PARM_FLG": 0, "RESULT": value,
             "TEST_TXT": result.test_name, "ALARM_ID": "", "OPT_FLAG": 0,
-        }
-        if result.lo_limit is None and result.hi_limit is None:
-            # optional trailing fields may be omitted when no limits exist
-            self._write(PTR, common, fields=9)
-            return
-        lo = -1.0e38 if result.lo_limit is None else float(result.lo_limit)
-        hi = 1.0e38 if result.hi_limit is None else float(result.hi_limit)
-        common.update({
             "RES_SCAL": 0, "LLM_SCAL": 0, "HLM_SCAL": 0,
             "LO_LIMIT": lo, "HI_LIMIT": hi, "UNITS": result.unit,
             "C_RESFMT": "", "C_LLMFMT": "", "C_HLMFMT": "",
             "LO_SPEC": lo, "HI_SPEC": hi,
+            "PIN_NUM": self.pin_indices.get((result.site, result.pin or ""), 0),
+            "C_NAM": result.pin or "",
         })
-        self._write(PTR, common)
 
     def _write_ftr(self, result: TestResult) -> None:
         fail_pin: Any = None

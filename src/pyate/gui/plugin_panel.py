@@ -37,6 +37,9 @@ _LOADED_COLUMNS = ("plugin", "status", "api", "contributes", "source")
 #: Columns of the "available on disk" table.
 _AVAILABLE_COLUMNS = ("plugin", "state", "description", "path")
 
+#: Colour of the ``state`` cell in the "available" table.
+_STATE_COLORS = {"loaded": "#35a86a", "disabled": "#d05c4c", "not loaded": "#8a929b"}
+
 
 class PluginPanel(QWidget):
     """Manage plugins: load, enable/disable and inspect their contributions."""
@@ -219,12 +222,15 @@ class PluginPanel(QWidget):
             self.table.selectRow(0)
 
     def _fill_available(self, entries: list[dict[str, Any]]) -> None:
+        """Rebuild the lower table, keeping the selected row on the same path."""
+        selected = self.selected_available_path()
         self.available.setSortingEnabled(False)
         self.available.setRowCount(len(entries))
         for row, entry in enumerate(entries):
+            state = str(entry.get("state") or ("loaded" if entry.get("loaded") else "not loaded"))
             values = (
                 str(entry.get("name", "")),
-                "loaded" if entry.get("loaded") else "not loaded",
+                state,
                 str(entry.get("doc") or "-"),
                 str(entry.get("path", "")),
             )
@@ -232,11 +238,18 @@ class PluginPanel(QWidget):
                 item = QTableWidgetItem(text)
                 item.setToolTip(text)
                 if column == 1:
-                    item.setForeground(QColor("#35a86a" if entry.get("loaded") else "#8a929b"))
+                    item.setForeground(QColor(_STATE_COLORS.get(state, "#8a929b")))
                 self.available.setItem(row, column, item)
             self.available.item(row, 0).setData(Qt.UserRole, entry.get("path", ""))
-            self.available.item(row, 0).setData(Qt.UserRole + 1, bool(entry.get("loaded")))
+            self.available.item(row, 0).setData(Qt.UserRole + 1, state)
         self.available.setSortingEnabled(True)
+        if selected:
+            for row in range(self.available.rowCount()):
+                item = self.available.item(row, 0)
+                if item is not None and item.data(Qt.UserRole) == selected:
+                    self.available.selectRow(row)
+                    break
+        self._on_available_selection()
 
     def _fill_log(self) -> None:
         lines: list[str] = []
@@ -276,16 +289,48 @@ class PluginPanel(QWidget):
         self.detail.setText(f"{name}: {doc or 'no description'}\nregisters: {notes}")
         self.toggle_btn.setEnabled(True)
         self.toggle_btn.setText("Disable" if entry.get("enabled") else "Enable")
+        self._sync_available_to(name)
 
-    def _on_available_selection(self) -> None:
+    def _sync_available_to(self, name: str) -> None:
+        """Highlight the same plugin in the lower table (keeps the two in step)."""
+        for row in range(self.available.rowCount()):
+            item = self.available.item(row, 0)
+            if item is not None and item.text() == name:
+                self.available.selectRow(row)
+                return
+
+    def selected_available_entry(self) -> tuple[str, str, str]:
+        """``(name, path, state)`` of the row selected in the lower table."""
         row = self.available.currentRow()
         item = self.available.item(row, 0) if row >= 0 else None
         if item is None:
+            return "", "", ""
+        return (
+            item.text(),
+            str(item.data(Qt.UserRole) or ""),
+            str(item.data(Qt.UserRole + 1) or ""),
+        )
+
+    def selected_available(self) -> tuple[str, str]:
+        """``(path, state)`` of the row selected in the lower table."""
+        _, path, state = self.selected_available_entry()
+        return path, state
+
+    def selected_available_path(self) -> str:
+        """Path of the row selected in the lower table (empty when none)."""
+        return self.selected_available()[0]
+
+    def _on_available_selection(self) -> None:
+        path, state = self.selected_available()
+        if not path:
             self.load_btn.setEnabled(False)
+            self.load_btn.setToolTip("")
             return
-        self.load_btn.setEnabled(not bool(item.data(Qt.UserRole + 1)))
-        if item.data(Qt.UserRole + 1):
-            self.load_btn.setToolTip("already loaded")
+        self.load_btn.setEnabled(state != "loaded")
+        if state == "loaded":
+            self.load_btn.setToolTip("already loaded (see the table above)")
+        elif state == "disabled":
+            self.load_btn.setToolTip("loaded but disabled - click to enable it again")
         else:
             self.load_btn.setToolTip("")
 
@@ -307,25 +352,35 @@ class PluginPanel(QWidget):
         )
 
     def load_selected(self) -> None:
-        """Load the plugin selected in the lower table."""
-        row = self.available.currentRow()
-        item = self.available.item(row, 0) if row >= 0 else None
-        if item is None:
+        """Load (or re-enable) the plugin selected in the lower table."""
+        name, path, state = self.selected_available_entry()
+        if not path:
             return
-        self.load_path(str(item.data(Qt.UserRole) or ""))
+        if state == "loaded":
+            self.pluginsChanged.emit(f"{name}: already loaded, see the table above")
+            return
+        if state == "disabled":
+            report = set_plugin_enabled(name, True)
+            self.refresh(report)
+            self.select_plugin(name)
+            self.pluginsChanged.emit(f"plugin {name}: enabled")
+            return
+        self.load_path(path)
 
     def load_path(self, path: str) -> bool:
         """Load a plugin file/package by path and refresh the page."""
         if not path:
             return False
+        before = set(self.report.get("loaded") or [])
         report = load_plugin(path)
         self.refresh(report)
-        name = Path(path).stem if path.endswith(".py") else Path(path).name
+        fresh = [name for name in report.get("loaded", []) if name not in before]
+        name = fresh[0] if fresh else (Path(path).stem if path.endswith(".py") else Path(path).name)
         if report.get("loaded_now"):
             self.select_plugin(name)
-            if Path(path).is_dir():
-                count = len([entry for entry in report["plugins"] if entry["enabled"]])
-                self.pluginsChanged.emit(f"plugins loaded from {Path(path).name}: {count} enabled")
+            if len(fresh) > 1:
+                self.pluginsChanged.emit(
+                    f"plugins loaded from {Path(path).name}: {len(fresh)} ({', '.join(fresh)})")
             else:
                 self.pluginsChanged.emit(f"plugin loaded: {name}")
             return True

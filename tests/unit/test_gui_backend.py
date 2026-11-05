@@ -78,7 +78,39 @@ def test_summary_groups_by_site_and_probability_plot() -> None:
     assert {(row.site, row.wafer, row.count) for row in both} == {
         (1, "", 2), (2, "", 1), (1, "W01", 1), (1, "W02", 1),
     }
-    assert all(row.part is None for row in both)
+    assert all(row.pin is None for row in both)
+
+
+def test_summary_groups_by_pin_and_a_part_id_no_longer_splits_rows() -> None:
+    bus = EventBus()
+    model = RunViewModel().attach(bus)
+    for pin, value in (("AVDD", 1.0), ("AVDD", 1.1), ("AVSS", 0.2)):
+        bus.publish(EventKind.TEST_RESULT, {"part_id": "P1", "result": {
+            "test_num": 200, "test_name": "continuity", "site": 1, "pin": pin,
+            "value": value, "unit": "V", "passed": True, "lo_limit": 0.0, "hi_limit": 2.0,
+        }})
+    rows = model.summary_rows(groups=("pin",))
+    assert {(row.pin, row.count) for row in rows} == {("AVDD", 2), ("AVSS", 1)}
+    assert model.trend(200, pin="AVDD") == [1.0, 1.1]
+    assert model.limits_of(200, pin="AVSS") == (0.0, 2.0)
+    # grouping by test keeps both pins in one row, and the column is empty there
+    assert [row.pin for row in model.summary_rows()] == [None]
+
+
+def test_summary_groups_by_pin_and_a_part_id_no_longer_splits_rows() -> None:
+    bus = EventBus()
+    model = RunViewModel().attach(bus)
+    for pin, value in (("AVDD", 1.0), ("AVDD", 1.1), ("AVSS", 0.2)):
+        bus.publish(EventKind.TEST_RESULT, {"part_id": "P1", "result": {
+            "test_num": 200, "test_name": "continuity", "site": 1, "pin": pin,
+            "value": value, "unit": "V", "passed": True, "lo_limit": 0.0, "hi_limit": 2.0,
+        }})
+    rows = model.summary_rows(groups=("pin",))
+    assert {(row.pin, row.count) for row in rows} == {("AVDD", 2), ("AVSS", 1)}
+    assert model.trend(200, pin="AVDD") == [1.0, 1.1]
+    assert model.limits_of(200, pin="AVSS") == (0.0, 2.0)
+    # grouping by test keeps both pins in one row, and the column is empty there
+    assert [row.pin for row in model.summary_rows()] == [None]
 
 
 def test_inspect_stdf_reports_lot_stats_and_per_wafer_tests(tmp_path: Path) -> None:
@@ -92,8 +124,10 @@ def test_inspect_stdf_reports_lot_stats_and_per_wafer_tests(tmp_path: Path) -> N
     writer.write_wir("W01")
     part = PartResult(part_id="P1", site=1, x=0, y=0, soft_bin=1, hard_bin=1, passed=True)
     writer.start_part(part)
-    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1, value=1.5, passed=True))
-    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1, value=2.5, passed=True))
+    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1,
+                                   value=1.5, passed=True, pin="AVDD"))
+    writer.write_result(TestResult(test_num=2000, test_name="idd_static", site=1,
+                                   value=2.5, passed=True, pin="AVSS"))
     writer.end_part(part)
     writer.write_wrr(wafer_id="W01", good=1)
     writer.write_summaries()
@@ -112,11 +146,22 @@ def test_inspect_stdf_reports_lot_stats_and_per_wafer_tests(tmp_path: Path) -> N
         model.add_measurement(
             test_num=row["test_num"], name=row["name"], site=row["site"],
             value=row["value"], passed=row["passed"], wafer=row["wafer"],
+            pin=row["pin"],
         )
     grouped = model.summary_rows(group="wafer")
     assert grouped[0].wafer == "W01"
     assert grouped[0].count == 2
     assert grouped[0].mean == pytest.approx(2.0)
+    # the pin travels through the STDF (PTR C_NAM) and splits the summary
+    assert [row["pin"] for row in report["measurements"]] == ["AVDD", "AVSS"]
+    by_pin = {row.pin: row.count for row in model.summary_rows(group="pin")}
+    assert by_pin == {"AVDD": 1, "AVSS": 1}
+    assert model.histogram(2000, pin="AVDD")[0][2] == 1
+    # the pin travels through the STDF (PTR C_NAM) and splits the summary
+    assert [row["pin"] for row in report["measurements"]] == ["AVDD", "AVSS"]
+    by_pin = {row.pin: row.count for row in model.summary_rows(group="pin")}
+    assert by_pin == {"AVDD": 1, "AVSS": 1}
+    assert model.histogram(2000, pin="AVDD")[0][2] == 1
 
 
 def test_intro_patterns_explain_the_failure_and_list_the_pass() -> None:

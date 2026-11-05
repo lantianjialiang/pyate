@@ -96,8 +96,10 @@ MRR
 1. `limits.csv` 按 `test_num` + `stage` + 温度窗匹配：stage 精确匹配优先于 `*`，
    温度窗越窄越优先；
 2. 找不到时回落到测试项参数里的 `lo`/`hi`；
-3. 都没有时只写前 9 个字段（`TEST_NUM..OPT_FLAG`），不写 limit 字段——
-   这是 STDF 允许的「无 limit」形态，`reader_check` 能正确识别。
+3. 都没有时写 STDF 规定的「无 limit」哨兵值：`LO_LIMIT = -1e38`、`HI_LIMIT = +1e38`
+   （`LO_SPEC` / `HI_SPEC` 相同）。读端把这组哨兵还原成「没有限值」。
+   早期版本会省略第 10 个字段之后的全部可选字段，但 `PIN_NUM` / `C_NAM` 排在
+   `HI_SPEC` 之后，省略就拿不到 pin，所以现在 PTR 总是写满到 `C_NAM`。
 
 ## 汇总记录
 

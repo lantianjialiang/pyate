@@ -149,7 +149,7 @@ def _flow_item_numbers(nodes: list[Any]) -> list[tuple[int, str]]:
 
 
 SUMMARY_COLUMNS = [
-    "test", "name", "site", "wafer", "part", "n", "pass", "fail",
+    "test", "name", "site", "wafer", "pin", "n", "pass", "fail",
     "mean", "stdev", "min", "max", "lo", "hi", "cp", "cpk",
 ]
 
@@ -161,7 +161,7 @@ def summary_cells(row: Any) -> list[str]:
         row.name,
         "all" if row.site is None else str(row.site),
         "all" if not row.wafer else row.wafer,
-        "all" if row.part is None else (row.part or "(none)"),
+        "all" if row.pin is None else (row.pin or "(no pin)"),
         str(row.count),
         str(row.passed),
         str(row.failed),
@@ -198,7 +198,7 @@ class GroupByBox(QWidget):
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         self._boxes: dict[str, QCheckBox] = {}
-        for name in ("site", "wafer", "part"):
+        for name in ("site", "wafer", "pin"):
             box = QCheckBox(name)
             box.toggled.connect(self._emit)
             self._boxes[name] = box
@@ -207,6 +207,12 @@ class GroupByBox(QWidget):
     def groups(self) -> tuple[str, ...]:
         """Selected dimensions, in display order."""
         return tuple(name for name, box in self._boxes.items() if box.isChecked())
+
+    def set_checked(self, name: str, checked: bool = True) -> None:
+        """Turn one dimension on/off (used by the screenshot tool and tests)."""
+        box = self._boxes.get(name)
+        if box is not None:
+            box.setChecked(bool(checked))
 
     def _emit(self, _checked: bool = False) -> None:
         self.changed.emit()
@@ -534,6 +540,9 @@ class FlowPanel(QWidget):
         item_form.addRow("site", self.item_site)
         self.item_clear = QCheckBox("clear Run data first")
         self.item_clear.setChecked(True)
+        self.item_clear.setToolTip(
+            "ignored while the run is paused at a breakpoint: clearing would stop "
+            "the run, so the debug result is appended instead")
         item_form.addRow("", self.item_clear)
         self.item_button = QPushButton("Run selected item")
         self.item_button.clicked.connect(self.run_selected_item)
@@ -1219,6 +1228,9 @@ class RunPanel(QWidget):
         self.summary_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.summary_table.setAlternatingRowColors(True)
         configure_table(self.summary_table)
+        # test numbers read best ascending; without this Qt keeps its own
+        # default (descending) for the first column
+        self.summary_table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
         self.summary_table.setColumnWidth(1, 140)
         self.summary_table.setColumnWidth(4, 140)
         self.summary_table.itemSelectionChanged.connect(self._paint_summary_charts)
@@ -1247,24 +1259,36 @@ class RunPanel(QWidget):
         self.shmoo_vdd = QSpinBox()
         self.shmoo_vdd.setRange(2, 64)
         self.shmoo_vdd.setValue(12)
+        self.shmoo_vdd.setToolTip("VDD axis: points between vdd_min and vdd_max")
         self.shmoo_period = QSpinBox()
         self.shmoo_period.setRange(2, 64)
         self.shmoo_period.setValue(12)
+        self.shmoo_period.setToolTip("period axis: points between period_min_ns and period_max_ns")
         self.shmoo_cycles = QSpinBox()
         self.shmoo_cycles.setRange(1, 100000)
         self.shmoo_cycles.setValue(16)
+        self.shmoo_cycles.setToolTip(
+            "pattern cycles executed at every grid point - a point passes when the "
+            "pattern still passes after this many cycles. It is not a third axis: "
+            "the map stays 2-D (VDD x period)")
         shmoo_run = QPushButton("Run shmoo")
         shmoo_run.clicked.connect(self.run_shmoo_once)
         shmoo_png = QPushButton("PNG")
         shmoo_png.clicked.connect(self.export_shmoo_png)
         shmoo_csv = QPushButton("CSV")
         shmoo_csv.clicked.connect(self.export_shmoo_csv)
-        for label, widget in (("V", self.shmoo_vdd), ("T", self.shmoo_period),
-                              ("cyc", self.shmoo_cycles)):
-            shmoo_row.addWidget(QLabel(label))
-            shmoo_row.addWidget(widget)
+        shmoo_row.addWidget(QLabel("grid"))
+        shmoo_row.addWidget(self.shmoo_vdd)
+        shmoo_row.addWidget(QLabel("V ×"))
+        shmoo_row.addWidget(self.shmoo_period)
+        shmoo_row.addWidget(QLabel("T points"))
+        shmoo_row.addSpacing(14)
+        shmoo_row.addWidget(QLabel("cycles/point"))
+        shmoo_row.addWidget(self.shmoo_cycles)
+        shmoo_row.addSpacing(14)
         for widget in (shmoo_run, shmoo_png, shmoo_csv):
             shmoo_row.addWidget(widget)
+        shmoo_row.addStretch(1)
         shmoo_layout.addLayout(shmoo_row)
         self.shmoo_info = QLabel("")
         self.shmoo_info.setWordWrap(True)
@@ -1362,11 +1386,11 @@ class RunPanel(QWidget):
             value = int(params.get(key, widget.value()) or widget.value())
             widget.setValue(max(widget.minimum(), min(widget.maximum(), value)))
         self.shmoo_info.setText(
-            f"{Path(path).parent.name} · {stage} · {self.shmoo_vdd.value()}×"
-            f"{self.shmoo_period.value()} grid · VDD {params.get('vdd_min', '-')}–"
-            f"{params.get('vdd_max', '-')} V · {params.get('period_min_ns', '-')}–"
-            f"{params.get('period_max_ns', '-')} ns · {self.shmoo_cycles.value()} cycles · "
-            "nominal die"
+            f"{Path(path).parent.name} · {stage} · 2-D grid VDD × period "
+            f"({self.shmoo_vdd.value()}×{self.shmoo_period.value()} points) · "
+            f"VDD {params.get('vdd_min', '-')}–{params.get('vdd_max', '-')} V · "
+            f"{params.get('period_min_ns', '-')}–{params.get('period_max_ns', '-')} ns · "
+            f"{self.shmoo_cycles.value()} pattern cycles per point · nominal die"
         )
 
     def _rebuild_site_checks(self, count: int, disabled: set[int]) -> None:
@@ -1473,6 +1497,15 @@ class RunPanel(QWidget):
         if self.handle is not None:
             self.handle.pause()
 
+    def is_paused(self) -> bool:
+        """True while a live run is waiting (breakpoint or pause).
+
+        The GUI keeps the flow parked in that state, so a single-item debug run
+        can be started without stopping it.
+        """
+        handle = self.handle
+        return bool(handle is not None and handle.running and handle.paused)
+
     def resume_run(self) -> None:
         """Resume a paused run."""
         if self.handle is not None:
@@ -1565,10 +1598,11 @@ class RunPanel(QWidget):
         flow = _flow_shmoo_params(path)
         params = {**flow, **params}
         self.shmoo_info.setText(
-            f"{Path(path).parent.name} · {params.get('vdd_min', '-')}–"
-            f"{params.get('vdd_max', '-')} V · {params.get('period_min_ns', '-')}–"
-            f"{params.get('period_max_ns', '-')} ns · {params['vdd_steps']}×"
-            f"{params['period_steps']} grid · {params['cycles']} cycles · nominal die"
+            f"{Path(path).parent.name} · 2-D grid VDD × period "
+            f"({params['vdd_steps']}×{params['period_steps']} points) · VDD "
+            f"{params.get('vdd_min', '-')}–{params.get('vdd_max', '-')} V · "
+            f"{params.get('period_min_ns', '-')}–{params.get('period_max_ns', '-')} ns · "
+            f"{params['cycles']} pattern cycles per point · nominal die"
         )
 
         def work() -> None:
@@ -1580,8 +1614,10 @@ class RunPanel(QWidget):
             self.shmooReady.emit(data)
 
         self.log_view.appendPlainText(
-            f"shmoo started: {params['vdd_steps']}x{params['period_steps']} grid, "
-            f"{params['cycles']} cycles, nominal die (no process variation)"
+            f"shmoo started: 2-D grid VDD × period, "
+            f"{params['vdd_steps']}x{params['period_steps']} points, "
+            f"{params['cycles']} pattern cycles per point, nominal die "
+            "(no process variation)"
         )
         threading.Thread(target=work, name="pyate-shmoo", daemon=True).start()
 
@@ -1611,7 +1647,7 @@ class RunPanel(QWidget):
     def _fill_summary(self) -> None:
         """Rebuild the test summary for the checked group dimensions."""
         rows = self.vm.summary_rows(groups=self.group_by.groups())
-        keys = [(row.test_num, row.site, row.wafer, row.part) for row in rows]
+        keys = [(row.test_num, row.site, row.wafer, row.pin) for row in rows]
         selected = self.summary_table.currentRow()
         self.summary_table.blockSignals(True)
         self.summary_table.setSortingEnabled(False)
@@ -1623,7 +1659,7 @@ class RunPanel(QWidget):
                 row.test_num, row.name,
                 -1 if row.site is None else row.site,
                 "" if row.wafer is None else row.wafer,
-                "" if row.part is None else row.part,
+                "" if row.pin is None else row.pin,
                 row.count, row.passed, row.failed,
                 row.mean, row.stdev, row.minimum, row.maximum,
                 row.lo, row.hi, row.cp, row.cpk,
@@ -1633,7 +1669,7 @@ class RunPanel(QWidget):
             self.summary_table.item(index, 0).setData(Qt.UserRole + 1, row.test_num)
             self.summary_table.item(index, 2).setData(Qt.UserRole + 1, row.site)
             self.summary_table.item(index, 3).setData(Qt.UserRole + 1, row.wafer)
-            self.summary_table.item(index, 4).setData(Qt.UserRole + 1, row.part)
+            self.summary_table.item(index, 4).setData(Qt.UserRole + 1, row.pin)
         if rows and not (0 <= selected < len(rows)):
             self.summary_table.setCurrentCell(0, 0)
         self._summary_keys = keys
@@ -1647,7 +1683,7 @@ class RunPanel(QWidget):
         test_item = self.summary_table.item(row_index, 0) if row_index >= 0 else None
         site_item = self.summary_table.item(row_index, 2) if row_index >= 0 else None
         wafer_item = self.summary_table.item(row_index, 3) if row_index >= 0 else None
-        part_item = self.summary_table.item(row_index, 4) if row_index >= 0 else None
+        pin_item = self.summary_table.item(row_index, 4) if row_index >= 0 else None
         if test_item is None:
             self.summary_histogram.set_bins([])
             self.summary_trend.set_values([])
@@ -1661,16 +1697,18 @@ class RunPanel(QWidget):
         if site_id is not None:
             site_id = int(site_id)
         wafer_id = None if wafer_item is None else wafer_item.data(Qt.UserRole + 1)
-        part_id = None if part_item is None else part_item.data(Qt.UserRole + 1)
-        lo, hi = self.vm.limits_of(test_num, site_id, wafer_id, part_id)
+        pin_id = None if pin_item is None else pin_item.data(Qt.UserRole + 1)
+        if pin_id is not None:
+            pin_id = str(pin_id)
+        lo, hi = self.vm.limits_of(test_num, site_id, wafer_id, pin_id)
         self.summary_histogram.set_limits(lo, hi)
         self.summary_trend.set_limits(lo, hi)
         self.summary_probability.set_limits(lo, hi)
         self.summary_histogram.set_bins(
-            self.vm.histogram(test_num, site=site_id, wafer=wafer_id, part=part_id))
-        self.summary_trend.set_values(self.vm.trend(test_num, site_id, wafer_id, part_id))
+            self.vm.histogram(test_num, site=site_id, wafer=wafer_id, pin=pin_id))
+        self.summary_trend.set_values(self.vm.trend(test_num, site_id, wafer_id, pin_id))
         self.summary_probability.set_points(
-            self.vm.probability(test_num, site_id, wafer_id, part_id))
+            self.vm.probability(test_num, site_id, wafer_id, pin_id))
 
     def export_wafer_map(self) -> None:
         """Save the current wafer map as PNG."""

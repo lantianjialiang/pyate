@@ -498,3 +498,35 @@ def test_api_plugin_report_and_toggle(tmp_path: Path) -> None:
     assert report["plugins"][0]["enabled"] is False
     assert report["registry"]["testitems"] == []
     assert plugin_report()["plugins"][0]["enabled"] is False
+
+
+def test_load_dir_loads_a_package_directory_as_one_plugin() -> None:
+    """The GUI hands over the package dir: its modules are not plugins of their own."""
+    from pyate.plugins.discovery import scan_candidates
+
+    found = {entry.name: entry for entry in scan_candidates([EXAMPLE_PLUGINS])}
+    package = found["plugin_adc_dut"].path
+    manager = PluginManager()
+    assert manager.load_dir(package) == ["plugin_adc_dut"]
+    manager.finalize()
+    assert manager.loaded == ["plugin_adc_dut"]
+    described = manager.describe()
+    assert [entry["name"] for entry in described] == ["plugin_adc_dut"]
+    assert "dut:adc" in described[0]["contributions"]
+    assert described[0]["api_version"] == API_VERSION
+
+
+def test_scan_plugins_tells_disabled_from_not_loaded(tmp_path: Path) -> None:
+    from pyate.api import load_plugin, scan_plugins, set_plugin_enabled
+
+    _write_plugin(tmp_path, _documented_source(), name="stated_plugin")
+    load_plugin(tmp_path)
+    states = {entry["name"]: entry["state"] for entry in scan_plugins([tmp_path])}
+    assert states["stated_plugin"] == "loaded"
+
+    set_plugin_enabled("stated_plugin", False)
+    entry = next(e for e in scan_plugins([tmp_path]) if e["name"] == "stated_plugin")
+    assert entry["state"] == "disabled"
+    assert entry["loaded"] is True
+    assert entry["enabled"] is False
+

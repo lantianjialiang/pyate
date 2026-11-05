@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 
 import pytest
 
@@ -517,6 +518,51 @@ def test_run_panel_shows_the_breakpoint_hit(qapp: QApplication) -> None:
     panel.close()
 
 
+class _RunNow(threading.Thread):
+    """``start()`` runs the body inline so a test does not have to poll."""
+
+    def start(self) -> None:  # noqa: D102 - Qt-free replacement
+        self.run()
+
+
+def test_single_item_runs_while_the_run_is_paused(
+        window: MainWindow, qapp: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A breakpoint parks the flow, so a debug item must not be refused."""
+    from types import SimpleNamespace
+
+    from pyate.api import EventBus as ApiBus
+
+    panel = window.run_panel
+    run_bus = ApiBus()  # stands in for the bus a live run owns
+    window.run_vm.detach()
+    window.run_vm.attach(run_bus)
+    window.run_vm.running = True
+    panel.handle = SimpleNamespace(running=True, paused=True, stop=lambda: None)
+
+    refused: list[str] = []
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.information",
+                        lambda *args, **kwargs: refused.append("info"))
+    monkeypatch.setattr("pyate.gui.main_window.threading.Thread", _RunNow)
+
+    panel.bp_box.setCurrentIndex(0)
+    test_num = int(panel.bp_box.currentData())
+    name = panel.bp_box.currentText().split()[1]
+    before = len(window.run_vm.rows)
+    window.run_single_item({
+        "name": name, "test_num": test_num, "stage": "CP1", "site": 1,
+        "clear": True, "params": None,
+    })
+    qapp.processEvents()
+
+    assert refused == [], "a paused run must accept a single item run"
+    assert panel.handle.running is True, "clear data must not stop the paused run"
+    assert window.run_vm.events is run_bus, "the run keeps its own bus"
+    assert len(window.run_vm.rows) > before, "the debug result must reach the datalog"
+    log = panel.log_view.toPlainText()
+    assert "appended to the run data" in log
+    assert f"{name} #{test_num}" in log
+
+
 def test_theme_menu_tracks_the_light_default(window: MainWindow) -> None:
     assert window.theme_actions["light"].isChecked()
     assert not window.theme_actions["dark"].isChecked()
@@ -557,7 +603,7 @@ def test_run_page_has_a_summary_grouped_by_site(window: MainWindow) -> None:
     assert "Summary" in labels
     assert "Charts" not in labels
     assert [box.text() for box in panel.group_by.findChildren(type(panel.site_checks[0]))] == [
-        "site", "wafer", "part",
+        "site", "wafer", "pin",
     ]
     assert panel.group_by.groups() == ()
     assert panel.datalog.columnCount() == 9

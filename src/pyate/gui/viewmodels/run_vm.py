@@ -36,6 +36,8 @@ class DatalogRow:
     lo: float | None
     hi: float | None
     passed: bool
+    #: Logical pin the result was measured on (``""`` for functional tests).
+    pin: str = ""
 
     def as_tuple(self) -> tuple[Any, ...]:
         """Row content in display order."""
@@ -56,14 +58,16 @@ class LogEntry:
 class TestSummaryRow:
     """One row of the run-page test summary.
 
-    ``site`` is ``None`` when the row combines every site.
+    ``site`` / ``wafer`` / ``pin`` are ``None`` when the row combines that
+    dimension. ``pin`` is the logical pin the test measures, which is how a
+    multi-pin item (continuity, VOL/VOH) is split apart.
     """
 
     test_num: int
     name: str
     site: int | None
     wafer: str | None
-    part: str | None
+    pin: str | None
     count: int
     passed: int
     failed: int
@@ -117,7 +121,7 @@ def _cp_cpk(mean: float | None, stdev: float | None,
 
 @dataclass
 class _Acc:
-    """Running count for one ``(test_num, site, wafer)`` triple."""
+    """Running count for one ``(test_num, site, wafer, pin)`` bucket."""
 
     name: str
     count: int = 0
@@ -149,12 +153,12 @@ class RunViewModel:
     """Aggregates run events into a render friendly snapshot."""
 
     def __init__(self, *, max_rows: int = 500, max_logs: int = 500,
-                 throttle_ms: int = 50, max_history_parts: int = 1000) -> None:
+                 throttle_ms: int = 50, max_history_groups: int = 1000) -> None:
         self.max_rows = int(max_rows)
         self.max_logs = int(max_logs)
         self.throttle_ms = int(throttle_ms)
-        self.max_history_parts = int(max_history_parts)
-        if min(self.max_rows, self.max_logs, self.max_history_parts) < 1:
+        self.max_history_groups = int(max_history_groups)
+        if min(self.max_rows, self.max_logs, self.max_history_groups) < 1:
             raise ValueError("view model buffer sizes must be positive")
         self.events: EventBus | None = None
         self.lock = threading.RLock()
@@ -192,6 +196,8 @@ class RunViewModel:
         self._series: dict[int, deque[float]] = {}
         self._site_series: dict[tuple[int, int], deque[float]] = {}
         self._wafer_series: dict[tuple[int, str], deque[float]] = {}
+        # keys are ``(test_num, site, wafer, pin)``: the pin is what splits a
+        # multi-pin item, and unlike a part id it cannot grow per die
         self._samples: dict[tuple[int, int, str, str], deque[float]] = {}
         self._acc: dict[tuple[int, int, str, str], _Acc] = {}
         self._totals: dict[tuple[int, int, str, str], _Acc] = {}
@@ -297,6 +303,7 @@ class RunViewModel:
         if result.get("skipped"):
             return
         part = str(data.get("part_id") or result.get("part_id") or "")
+        pin = str(result.get("pin") or data.get("pin") or "")
         row = DatalogRow(
             seq=seq,
             site=int(result.get("site") or data.get("site") or 0),
@@ -308,16 +315,17 @@ class RunViewModel:
             lo=result.get("lo_limit"),
             hi=result.get("hi_limit"),
             passed=bool(result.get("passed", True)),
+            pin=pin,
         )
         self._rows.append(row)
         self._pending.append(row)
         self._test_names[row.test_num] = row.name
         wafer = self.unit or ""
-        key = (row.test_num, row.site, wafer, part)
-        history_key = (wafer, part)
+        key = (row.test_num, row.site, wafer, pin)
+        history_key = (wafer, pin)
         self._history_keys.setdefault(history_key, set()).add(key)
         self._history_keys.move_to_end(history_key)
-        while len(self._history_keys) > self.max_history_parts:
+        while len(self._history_keys) > self.max_history_groups:
             _, expired = self._history_keys.popitem(last=False)
             for old_key in expired:
                 self._samples.pop(old_key, None)
@@ -510,7 +518,7 @@ class RunViewModel:
             "aborted": self.aborted,
             "paused_at": dict(self.paused_at) if self.paused_at else None,
             "error": self.error,
-            "history_parts": len(self._history_keys),
+            "history_groups": len(self._history_keys),
             "history_evictions": self.history_evictions,
         }
 
@@ -562,10 +570,10 @@ class RunViewModel:
 
     @_synchronized
     def trend(self, test_num: int, site: int | None = None,
-              wafer: str | None = None, part: str | None = None) -> list[float]:
+              wafer: str | None = None, pin: str | None = None) -> list[float]:
         """Recent measured values of one test (oldest first)."""
-        if part is not None:
-            return self._values(test_num, site, wafer, part)
+        if pin is not None:
+            return self._values(test_num, site, wafer, pin)
         if wafer:
             return list(self._wafer_series.get((int(test_num), str(wafer)), ()))
         if site is None:
@@ -575,19 +583,19 @@ class RunViewModel:
     def histogram(self, test_num: int, bins: int = 10,
                   site: int | None = None,
                   wafer: str | None = None,
-                  part: str | None = None) -> list[tuple[float, float, int]]:
-        """Histogram of one test. ``site``, ``wafer`` or ``part`` limits the sample."""
-        return _histogram(self._values(test_num, site, wafer, part), bins)
+                  pin: str | None = None) -> list[tuple[float, float, int]]:
+        """Histogram of one test. ``site``, ``wafer`` or ``pin`` limits the sample."""
+        return _histogram(self._values(test_num, site, wafer, pin), bins)
 
     def probability(self, test_num: int, site: int | None = None,
                     wafer: str | None = None,
-                    part: str | None = None) -> list[tuple[float, float]]:
+                    pin: str | None = None) -> list[tuple[float, float]]:
         """Normal probability plot as ``(value, z)`` pairs, sorted by value.
 
         ``z`` is the inverse-normal of the plotting position ``(i+0.5)/n``.
         Fewer than two numeric samples yields an empty list.
         """
-        data = sorted(self._values(test_num, site, wafer, part))
+        data = sorted(self._values(test_num, site, wafer, pin))
         count = len(data)
         if count < 2:
             return []
@@ -599,19 +607,19 @@ class RunViewModel:
                      groups: Iterable[str] | None = None) -> list[TestSummaryRow]:
         """Per-test summary.
 
-        ``groups`` may contain ``site``, ``wafer`` and ``part`` together.
+        ``groups`` may contain ``site``, ``wafer`` and ``pin`` together.
         ``group="test"`` (the default) is one row per test. ``by_site=True``
         is the same as ``group="site"``.
         """
         selected = _group_names(group, by_site=by_site, groups=groups)
         grouped: dict[tuple[int, int | None, str | None, str | None], _Acc] = {}
-        source = self._acc if "part" in selected else self._totals
-        for (test_num, site, wafer, part), acc in source.items():
+        source = self._acc if "pin" in selected else self._totals
+        for (test_num, site, wafer, pin), acc in source.items():
             key = (
                 test_num,
                 site if "site" in selected else None,
                 wafer if "wafer" in selected else None,
-                part if "part" in selected else None,
+                pin if "pin" in selected else None,
             )
             bucket = grouped.get(key)
             if bucket is None:
@@ -643,7 +651,7 @@ class RunViewModel:
             if acc.hi is not None:
                 bucket.hi = acc.hi
         rows: list[TestSummaryRow] = []
-        for (test_num, site, wafer, part), acc in grouped.items():
+        for (test_num, site, wafer, pin), acc in grouped.items():
             mean = acc.mean if acc.numeric else None
             stdev = _stdev(acc)
             cp, cpk = _cp_cpk(mean, stdev, acc.lo, acc.hi)
@@ -652,7 +660,7 @@ class RunViewModel:
                 name=acc.name,
                 site=site,
                 wafer=wafer,
-                part=part,
+                pin=pin,
                 count=acc.count,
                 passed=acc.passed,
                 failed=acc.count - acc.passed,
@@ -669,22 +677,22 @@ class RunViewModel:
             row.test_num,
             -1 if row.site is None else row.site,
             "" if row.wafer is None else row.wafer,
-            "" if row.part is None else row.part,
+            "" if row.pin is None else row.pin,
         ))
         return rows
 
     @_synchronized
     def _values(self, test_num: int, site: int | None = None,
-                wafer: str | None = None, part: str | None = None) -> list[float]:
+                wafer: str | None = None, pin: str | None = None) -> list[float]:
         values: list[float] = []
-        for (num, sample_site, sample_wafer, sample_part), samples in self._samples.items():
+        for (num, sample_site, sample_wafer, sample_pin), samples in self._samples.items():
             if num != int(test_num):
                 continue
             if site is not None and sample_site != int(site):
                 continue
             if wafer is not None and sample_wafer != str(wafer):
                 continue
-            if part is not None and sample_part != str(part):
+            if pin is not None and sample_pin != str(pin):
                 continue
             values.extend(samples)
         return values
@@ -692,19 +700,19 @@ class RunViewModel:
     @_synchronized
     def limits_of(self, test_num: int, site: int | None = None,
                   wafer: str | None = None,
-                  part: str | None = None) -> tuple[float | None, float | None]:
+                  pin: str | None = None) -> tuple[float | None, float | None]:
         """Spec limits for the same slice the summary charts are showing."""
         lo: float | None = None
         hi: float | None = None
-        source = self._acc if part is not None else self._totals
-        for (num, sample_site, sample_wafer, sample_part), acc in source.items():
+        source = self._acc if pin is not None else self._totals
+        for (num, sample_site, sample_wafer, sample_pin), acc in source.items():
             if num != int(test_num):
                 continue
             if site is not None and sample_site != int(site):
                 continue
             if wafer is not None and sample_wafer != str(wafer):
                 continue
-            if part is not None and sample_part != str(part):
+            if pin is not None and sample_pin != str(pin):
                 continue
             if acc.lo is not None:
                 lo = acc.lo
@@ -724,7 +732,7 @@ class RunViewModel:
     @_synchronized
     def add_measurement(self, *, test_num: int, name: str, site: int,
                         value: float | None, passed: bool, wafer: str = "",
-                        part: str = "",
+                        part: str = "", pin: str = "",
                         lo: float | None = None, hi: float | None = None) -> None:
         """Record one result that did not come from the live event bus.
 
@@ -738,6 +746,7 @@ class RunViewModel:
             "value": value,
             "passed": bool(passed),
             "part_id": part,
+            "pin": pin,
             "lo_limit": lo,
             "hi_limit": hi,
         }})

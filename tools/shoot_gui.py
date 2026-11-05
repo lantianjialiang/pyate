@@ -68,6 +68,9 @@ def _shoot_summary(window, out: Path, suffix: str) -> Path:
 
     panel = window.run_panel
     panel.view_tabs.setCurrentWidget(panel.summary_page)
+    # split by pin so the new column shows real values (and the charts follow
+    # the selected pin) instead of the aggregated "all"
+    panel.group_by.set_checked("pin", True)
     QCoreApplication.processEvents()
     table = panel.summary_table
     n_column = None
@@ -78,12 +81,41 @@ def _shoot_summary(window, out: Path, suffix: str) -> Path:
             break
     if n_column is None:
         return _shoot(window, out / f"gui_10_summary{suffix}.png")
-    for row in range(table.rowCount()):
-        item = table.item(row, n_column)
-        if item is not None and item.text().strip().isdigit() and int(item.text()) > 0:
-            table.selectRow(row)
-            break
+    from PySide6.QtCore import Qt
+
+    table.setSortingEnabled(True)
+    table.sortItems(0, Qt.AscendingOrder)
+    _select_row_with_data(table)
     return _shoot(window, out / f"gui_10_summary{suffix}.png")
+
+
+def _select_row_with_data(table: Any, *, pin_column: int = 4, n_column: int | None = None) -> None:
+    """Select a row that has samples and, if possible, a real pin.
+
+    A ``(no pin)`` row of a multi-pin test usually holds a single sample, so its
+    charts are empty; the pin column is also what the screenshot is meant to show.
+    """
+    if n_column is None:
+        for column in range(table.columnCount()):
+            header = table.horizontalHeaderItem(column)
+            if header is not None and header.text() == "n":
+                n_column = column
+                break
+    if n_column is None:
+        return
+    fallback = None
+    for row in range(table.rowCount()):
+        count = table.item(row, n_column)
+        pin = table.item(row, pin_column)
+        if count is None or not count.text().strip().isdigit() or int(count.text()) <= 0:
+            continue
+        if fallback is None:
+            fallback = row
+        if pin is not None and pin.text() not in ("", "all", "(no pin)"):
+            table.selectRow(row)
+            return
+    if fallback is not None:
+        table.selectRow(fallback)
 
 
 def _shmoo_params(session_path: str) -> dict[str, Any]:
@@ -172,7 +204,13 @@ def main(argv: list[str] | None = None) -> int:
         _shoot_summary(window, args.out, suffix)
         stdf_files = sorted(out_dir.glob("*.stdf"))
         if stdf_files:
+            from PySide6.QtCore import Qt
+
             window.stdf_panel.load_file(str(stdf_files[0]))
+            # show what the pin column is good for: one row per measured pin
+            window.stdf_panel.group_by.set_checked("pin", True)
+            window.stdf_panel.table.horizontalHeader().setSortIndicator(0, Qt.AscendingOrder)
+            _select_row_with_data(window.stdf_panel.table)
             window.tabs.setCurrentWidget(window.stdf_panel)
             _shoot(window, args.out / f"gui_6_stdf{suffix}.png")
 

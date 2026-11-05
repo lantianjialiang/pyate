@@ -245,3 +245,35 @@ HALT 错误、TEST_START/TEST_RESULT/FLOW_STEP 全部复用），只是把 `prog
 界面细节：表格列 `plugin / status / api / contributes / source`，选中行下方显示 doc 与注册清单；
 状态色 #35a86a / #d05c4c 在深浅主题都可读；`QTableWidget` 的 QSS 补了 `selection-color`
 （原先选中行保留单元格前景色，绿字压在浅蓝底上几乎看不见）。
+
+## D32 Summary 的第四维从 `part` 换成 `pin`
+Summary 的 `group by` 原本是 site / wafer / part。part 是 die 的 id：
+- 一颗 die 一行，整片 wafer 几百行，表格既读不过来，也没法同时看多个 site；
+- 明细统计本来就按 `(wafer, part)` 做 LRU（1000 桶），旧 die 的桶早被淘汰，
+  所以 part 分组看到的其实是"最近 1000 颗"，容易被误读成完整数据。
+
+换成 `pin`：`_acc` / `_samples` 的键改成 `(test_num, site, wafer, pin)`，
+`TestSummaryRow.part` → `TestSummaryRow.pin`，表头第 5 列、图表筛选、`limits_of()` 同步。
+pin 的键空间是"测试 × pin"，不会随 die 数增长，所以窗口淘汰只在极端情况（每颗 die 一个 pin
+的插件）才触发；`max_history_parts` 随之改名 `max_history_groups`，`snapshot.history_parts`
+改名 `history_groups`。不分组时的 `_totals` 仍是全程精确累计。
+
+STDF 侧要能让"按 pin 分组"有意义，所以 PTR 记录补了 `PIN_NUM` + `C_NAM`
+（`TestResult.pin`）。这两个字段排在 `HI_SPEC` 之后，于是"没有 limit 就只写前 9 个字段"的
+省字节优化被去掉了：没有 limit 时按 STDF 惯例写 ±1e38 哨兵，读端仍还原成 None。
+`api/stdf_view.py` 读 `C_NAM`（旧文件退回 `PIN_NUM`），STDF 页因此也能按 pin 分组。
+
+## D33 断点暂停时允许单跑一项
+`Run selected item` 原来只要 `run_vm.running` 就拒绝。但断点停住时 flow 阻塞在
+`_wait_if_paused()`，HAL 是空闲的，"停下来看看某一项到底测出什么"恰恰是这个按钮最该用的时候。
+
+放开这个限制要注意三件事，都按"不打扰这一轮"处理：
+1. **不能 clear**。`clear_results()` 会 `handle.stop()`，等于把这一轮杀掉；暂停时忽略
+   `clear Run data first`，结果追加到当前数据里，日志写明原因。
+2. **不能换 bus**。原实现把 view model detach 再 attach 到调试 bus，暂停中的 run 就再也
+   收不到事件；改成"谁在用就继续用"，单项结果走一条临时 bus（只让 view model 订阅）。
+3. **不能污染 STDF**。run 的 bus 同时喂 datalog sink，单项结果若发到那里会被写进正在
+   生成的 STDF；临时 bus 完全隔开，`run_item()` 本来也自建 DUT/HAL，所以两不相干。
+
+判定用 `RunPanel.is_paused()`（`handle.running and handle.paused`），不看
+`snapshot["paused_at"]`——那个字段在 Resume 之后不会清，只能当提示用。

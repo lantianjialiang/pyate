@@ -28,7 +28,7 @@ Prober/Handler 是带接触不良、卡料等真实故障的模拟器。同一�
 | 批量 | `batch.yaml` 参数扫（笛卡尔积）、串行/线程/进程、`fail_fast`、聚合 yield/pareto/Cpk |
 | STDF | 自研 V4 writer（FAR/ATR/MIR/SDR/WIR/WCR/PIR/PTR/FTR/PRR/TSR/HBR/SBR/PCR/MRR），可 gzip、大小端；`reader_check` + pystdf 交叉校验 |
 | Datalog | CSV、Text、JSONL（插件）、`stats.json`（Cpk/直方图）、`summary.json` |
-| GUI | 7 个页签（Config / TestFlow / Limits/Bins / Run / Pattern / STDF / Plugins，见[界面与使用](#界面与使用)）。Run 页有 datalog、Summary（可按 site / wafer / part 组合，含 mean / stdev / Cp / Cpk）、限值线、wafer、Tray、净 UPH / gross / OEE，Shmoo 子页可一键扫 VDD × period（标称 die，网格与 flow 一致）；按 test number 下断点（one shot）、Pause / Step / Resume；TestFlow 里可单独跑选中的一项，结果直接进 Run 页 |
+| GUI | 7 个页签（Config / TestFlow / Limits/Bins / Run / Pattern / STDF / Plugins，见[界面与使用](#界面与使用)）。Run 页有 datalog、Summary（可按 site / wafer / pin 组合，含 mean / stdev / Cp / Cpk）、限值线、wafer、Tray、净 UPH / gross / OEE，Shmoo 子页可一键扫 VDD × period（标称 die，网格与 flow 一致）；按 test number 下断点（one shot）、Pause / Step / Resume，停在断点时仍可从 TestFlow 单跑一项；TestFlow 里可单独跑选中的一项，结果直接进 Run 页 |
 | 插件 | pluggy hookspec + 目录扫描/entry points，`pyate plugin new` 脚手架、`pyate plugin list` 查看加载结果，GUI **Plugins** 页可加载/启停插件，示例见 `examples/plugins/`（ADC DUT / JSONL sink / failwatch 钩子） |
 
 ## 安装
@@ -218,7 +218,8 @@ TestFlow / Limits-Bins），再跑（Run），再看产物（Pattern / STDF / Pl
 - 勾选框就是 `enabled`，取消会写回 `testprogram.yaml`，执行时跳过该项。选中节点，右边是参数、`on_fail`
   （continue / stop / retest）和 **Apply to node**；**Move up / Move down** 或拖拽可排序，移动后仍保持选中。
 - 右侧 **run one item** 只跑这一项：选 site（或 all sites）点 **Run selected item**，结果进 Run 页。参数取表单
-  当前值，不用先 Apply；默认勾着 **clear Run data first**，免得单项样本混进整轮把 Cpk 算错。
+  当前值，不用先 Apply；默认勾着 **clear Run data first**，免得单项样本混进整轮把 Cpk 算错。整轮还在跑时会拒绝，
+  但**停在断点时可以用**（见下一节）：这时 clear 会被忽略，结果追加到这一轮的数据里。
 - Limits 改完 lo/hi 先 **Apply changes**，再到 Config 页 **Save limits** 才写回 `limits.csv`。
 
 ### 3. Run：开始，以及断点怎么用
@@ -250,6 +251,8 @@ run control 分两行：
 3. **Resume** 跑到底，**Stop** 放弃这一轮，**Clear data** 丢掉结果并停掉正在跑的那轮（断点和 site 勾选不动），
    **Clear** 清空所有断点。
 4. 想逐项看又懒得设断点：Start 后马上 Pause，然后反复 Step。
+5. 停在断点上时可以切到 TestFlow 点 **Run selected item** 单独跑任意一项：它用自己的 DUT 和单独的 event bus，
+   不会碰这一轮的状态和 STDF，结果直接进 Run 页的 datalog / Summary，看完再回来 Resume。
 
 ### 4. 结果：Wafer / Summary / Shmoo / Tray
 
@@ -259,14 +262,18 @@ run control 分两行：
 
 - **Wafer**：每颗 die 按 soft bin 上色，边缘 die 是完整方块；悬停看坐标、bin 和第一个失败项；下面一条是
   bin 比例，**Export wafer map PNG** 存图。
-- **Summary**：`group by` 可选 test / site / wafer / part，每个测试一行 `n / pass / fail / mean / stdev /
-  min / max / lo / hi / cp / cpk`；选中一行，下面同时画 histogram、trend、probability，橙色虚线是 lower
-  limit、红色虚线是 high limit。
+- **Summary**：`group by` 可选 test / site / wafer / pin，每个测试一行 `n / pass / fail / mean / stdev /
+  min / max / lo / hi / cp / cpk`。`pin` 是这一项测的逻辑 pin（continuity、VOL/VOH 会按 pin 拆开，功能项没有
+  pin 就显示 `(no pin)`），勾上它就能按 pin 看每一路的分布；选中一行，下面同时画 histogram、trend、
+  probability，橙色虚线是 lower limit、红色虚线是 high limit。
 
 ![Summary](docs/images/gui_10_summary.png)
 
 - **Shmoo**：flow 里的 `shmoo` 项跑完后出图，横轴 period、纵轴 VDD，可导出 PNG / CSV。想看真正有边界的图用
   `configs\demo_shmoo\session.yaml`；不想把 shmoo 放进每颗 die 时，用本页 **Run shmoo** 只扫一次标称 die。
+  工具栏是 `grid V × T points` 加一个 `cycles/point`：网格只有两个坐标轴（VDD × period），`cycles/point`
+  **不是第三个轴**，它是每个格点要跑多少个 pattern cycle——跑满这些 cycle 仍然通过就算这个点 pass，
+  所以越大越严格（边缘会往右下收缩）。三个框默认取 flow 里那一项的值。
 
 ![Shmoo](docs/images/gui_8_shmoo.png)
 
@@ -288,7 +295,8 @@ run control 分两行：
 **Open STDF...** 选一次运行写出的 `.stdf`。顶部是统计卡片：文件路径、`lot / part / job / node / stage / temp`
 一行、`parts / good / yield / retests / PTR / FTR` 六个数字、hard / soft bin 芯片、各记录条数
 （FAR/ATR/MIR/SDR/WIR/WCR/PIR/PTR/FTR/PRR/TSR/HBR/SBR/PCR/MRR）。下面的表和 Run 的 Summary 一样，也能按
-test / site / wafer / part 分组——数据来自文件里的 PTR/FTR，不是当前这次运行，所以可以拿它核对写出的 STDF
+test / site / wafer / pin 分组（pin 来自 PTR 的 `C_NAM`，pyate 写文件时会一起写进去）——数据来自文件里的
+PTR/FTR，不是当前这次运行，所以可以拿它核对写出的 STDF
 （图里 good 594、yield 88.26%，与运行汇总一致）。
 
 ### 7. Plugins：加载、启停、看注册了什么
@@ -298,8 +306,9 @@ test / site / wafer / part 分组——数据来自文件里的 PTR/FTR，不是
 菜单 **Tools → Plugins...**（`Ctrl+Shift+P`）或最后一个页签。顶部是搜索路径和 `api / policy / loaded /
 contributions` 芯片；`installed plugins` 表列出 plugin / status / api / contributes / source，选中一行，下面
 灰字是说明与注册清单；**Disable / Enable** 立即生效（停用会连它注册的 DUT 模型、test item、sink 一起撤掉）；
-`available in the search paths` 是磁盘上有但还没加载的，双击即加载；**Load file... / Load folder... /
-Reload all** 手工加载与重扫；底部日志是 registry 的 note / warning / error。写法见下面的[插件](#插件不改源码扩展模拟器)一节。
+`available in the search paths` 是磁盘上的候选插件（`state` 显示 `not loaded` / `loaded` / `disabled`，双击即
+加载或重新启用），两张表按插件名联动高亮；**Load file... / Load folder... / Reload all** 手工加载与重扫；底部
+日志是 registry 的 note / warning / error。写法见下面的[插件](#插件不改源码扩展模拟器)一节。
 
 ### 浅色与深色
 
@@ -363,8 +372,11 @@ note: failwatch: writes <out>/fails.log for every failing result
 - **installed plugins**：谁 enabled、API 版本、注册了什么（`dut:adc`、`testitem:adc_inl_dnl`、`sink:json`）、
   来自哪个文件。选中一行，下面的灰字是它的说明；右侧 **Disable / Enable** 立即生效（下一个 run 使用新的注册表），
   disable 会把插件注册的 DUT 模型 / test item / sink 一并撤掉，enable 再加回来；
-- **available in the search paths**：磁盘上有但还没加载的插件，双击或 **Load selected** 直接加载；
-- **Load file... / Load folder...**：加载任意 `.py` 或包目录；**Reload all** 重新扫描一遍；
+- **available in the search paths**：磁盘上的候选插件，`state` 列有三种值——`not loaded`（没加载，可以
+  **Load selected** 或双击）、`loaded`（已启用，按钮变灰）、`disabled`（加载过但被停用，按钮变成"重新启用"）。
+  两个表按同一个插件名对齐：在上下任意一处选中一个插件，另一处会跟着高亮，不会一边说 enabled 一边说 not loaded；
+- **Load file... / Load folder...**：加载任意 `.py` 或包目录（选到包目录也行，整包算一个插件，不会把包里的
+  `items.py` 当成独立插件）；**Reload all** 重新扫描一遍；
 - 底部日志列出 registry 的 note / warning / error（比如忘记 `@hookimpl`）。
 
 GUI 与 CLI 共用同一个 `PluginManager`：`pyate plugin list` 看到的、GUI 里 Run 页跑的，是同一份注册表。
@@ -515,7 +527,7 @@ pytest tests/gui -q           # E2E-GUI（QT_QPA_PLATFORM=offscreen）
 
 | 门槛 | 命令 | 现状 |
 |---|---|---|
-| 全部测试 | `pytest` | 435 例通过 |
+| 全部测试 | `pytest` | 441 例通过 |
 | 行覆盖率 ≥85%（`src/pyate`） | `python tools/coverage_std.py --fail-under 85` | 见下 |
 | 分层约束 | `pytest tests/unit/test_layering.py` | core 不含 Qt/gui，gui 只用 `pyate.api` |
 | 示例配置可校验 | `pyate config validate configs/demo_cp/session.yaml`（demo_ft 同） | OK |

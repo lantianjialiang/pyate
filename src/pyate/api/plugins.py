@@ -50,14 +50,52 @@ def plugin_report(manager: PluginManager | None = None) -> dict[str, Any]:
 
 def scan_plugins(paths: list[str | Path] | None = None,
                  manager: PluginManager | None = None) -> list[dict[str, Any]]:
-    """Candidates found on disk, each flagged with ``loaded``."""
-    loaded = {str(item) for item in _manager(manager).loaded}
+    """Candidates found on disk, each flagged with its state.
+
+    ``state`` is ``"loaded"`` (enabled), ``"disabled"`` (known but switched off)
+    or ``"not loaded"``; ``loaded`` stays true for both of the first two so the
+    two tables of the plugin page cannot disagree about a plugin the manager
+    knows.  Candidates are matched by name first, then by source path, because
+    a project may be loaded from its root while the candidate is its package
+    directory.
+    """
+    known = {entry["name"]: entry for entry in _manager(manager).describe()}
     entries: list[dict[str, Any]] = []
     for candidate in scan_candidates(list(paths) if paths else None):
+        entry = known.get(candidate.name) or _match_by_source(known, candidate.path)
+        if entry is None:
+            state = "not loaded"
+        else:
+            state = "loaded" if entry.get("enabled") else "disabled"
         data = candidate.to_dict()
-        data["loaded"] = candidate.name in loaded
+        data["loaded"] = state != "not loaded"
+        data["state"] = state
+        data["enabled"] = bool(entry and entry.get("enabled"))
         entries.append(data)
     return entries
+
+
+def _match_by_source(known: dict[str, dict[str, Any]],
+                     path: Path) -> dict[str, Any] | None:
+    """The known plugin whose source is the same file/directory as ``path``."""
+    target = _resolved(path)
+    if target is None:
+        return None
+    for entry in known.values():
+        source = _resolved(entry.get("source") or "")
+        if source is None:
+            continue
+        if target == source or source in target.parents:
+            # same directory, or the candidate is the project root of ``source``
+            return entry
+    return None
+
+
+def _resolved(path: str | Path) -> Path | None:
+    try:
+        return Path(path).resolve()
+    except OSError:  # pragma: no cover - defensive
+        return None
 
 
 def load_plugin(path: str | Path, manager: PluginManager | None = None) -> dict[str, Any]:

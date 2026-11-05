@@ -123,6 +123,9 @@ def _assemble(path: Path, records: list[tuple[str, dict[str, Any]]]) -> dict[str
                 "value": None if value is None else float(value),
                 "passed": not bool(flags & _FAIL),
                 "part": "",
+                # C_NAM is the logical pin name (pyate writes it); PIN_NUM is
+                # the channel index, kept as a fallback for hand-made files
+                "pin": str(values.get("C_NAM") or "") or str(values.get("PIN_NUM") or ""),
                 "lo": _open_limit(values.get("LO_LIMIT")) if name == "PTR" else None,
                 "hi": _open_limit(values.get("HI_LIMIT")) if name == "PTR" else None,
             })
