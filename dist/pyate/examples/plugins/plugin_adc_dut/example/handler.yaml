@@ -1,0 +1,7 @@
+layout:
+  cols: 2
+  rows: 1
+cycle_time_ms: 120.0
+jam_prob: 0.0
+tray_capacity: 20
+temperature: 25.0

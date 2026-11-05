@@ -1,0 +1,21 @@
+name: demo_ft
+description: 'FT demo: 8 sites, 2 trays x 500 parts, handler jam/contact fail'
+program: testprogram.yaml
+tester: tester.yaml
+channel_map: channel_map.yaml
+loadboard: loadboard.yaml
+levels: levels.yaml
+timing: timing.yaml
+limits: limits.csv
+binning: binning.yaml
+dut_profile: dut_profile.yaml
+lot: lot.yaml
+handler: handler.yaml
+stdf: stdf_options.yaml
+run:
+  stage: FT1
+  sites: 8
+  seed: 7
+  output_dir: out
+  parallel_mode: thread
+  disabled_sites: []

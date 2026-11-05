@@ -1,0 +1,5 @@
+board_id: LB-DEMO-01
+site_count: 4
+relay_map:
+  pmu_bus: PMU1
+  dps_bus: DPS1

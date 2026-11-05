@@ -1,0 +1,13 @@
+name: SIM-ATE-FT
+model: PYATE-SIM
+num_sites_max: 8
+digital_channels: 512
+dps_channels: 16
+pmu_channels: 128
+max_vector_rate_mhz: 200.0
+vector_depth: 1000000
+overhead_ms: 0.5
+simulation:
+  noise_sigma: 0.002
+  sim_time_scale: 0.0
+  seed: 20261021

@@ -1,0 +1,35 @@
+program: PLUGIN_ADC
+revision: '1.0'
+flows:
+  EXT1:
+  - item: continuity
+    test_num: 1000
+    params:
+      fail_code: 2
+    on_fail:
+      action: stop
+      bin: 2
+  - item: idd_static
+    test_num: 2000
+    params:
+      fail_code: 4
+    on_fail:
+      action: continue
+  - item: adc_inl_dnl
+    test_num: 5000
+    params:
+      fail_code: 5
+      hi_dnl: 1.0
+      lo_dnl: -1.0
+      hi_inl: 1.5
+      lo_inl: -1.5
+    on_fail:
+      action: continue
+      bin: 5
+  - item: adc_offset_gain
+    test_num: 5100
+    params:
+      fail_code: 5
+    on_fail:
+      action: continue
+      bin: 5

@@ -1,0 +1,107 @@
+program: DEMO_SHMOO
+revision: '1.0'
+flows:
+  CP1:
+  - item: continuity
+    test_num: 1000
+    params:
+      fail_code: 2
+    on_fail:
+      action: stop
+      bin: 2
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null
+  - item: adc_inl_dnl
+    test_num: 10001
+    params:
+      fail_code: 2
+    on_fail:
+      action: stop
+      bin: 2
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null
+  - item: fmax_search
+    test_num: 4000
+    params:
+      pattern: cnt_loop.pat
+      period_min_ns: 4.0
+      period_max_ns: 140.0
+      resolution_ns: 1.0
+      cycles: 64
+      fail_code: 7
+    on_fail:
+      action: continue
+      bin: null
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null
+  - item: vdd_min_search
+    test_num: 4100
+    params:
+      pattern: cnt_loop.pat
+      vdd_start: 3.6
+      vdd_stop: 2.55
+      resolution: 0.01
+      cycles: 64
+      fail_code: 7
+    on_fail:
+      action: continue
+      bin: null
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null
+  - item: idd_static
+    test_num: 2000
+    params:
+      fail_code: 4
+    on_fail:
+      action: continue
+      bin: null
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null
+  - item: shmoo
+    test_num: 9100
+    params:
+      pattern: cnt_loop.pat
+      vdd_min: 2.6
+      vdd_max: 3.6
+      vdd_steps: 21
+      period_min_ns: 8.0
+      period_max_ns: 128.0
+      period_steps: 31
+      cycles: 32
+      min_pass_rate: 0.0
+      fail_code: 7
+    on_fail:
+      action: continue
+      bin: null
+      max_retries: 0
+    enabled: true
+    group: null
+    items: []
+    branch: null
+    loop: null
+    goto_bin: null

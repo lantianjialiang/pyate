@@ -1,0 +1,13 @@
+name: SIM-ATE-EXT
+model: PYATE-SIM
+num_sites_max: 2
+digital_channels: 64
+dps_channels: 8
+pmu_channels: 64
+max_vector_rate_mhz: 100.0
+vector_depth: 65536
+overhead_ms: 0.2
+simulation:
+  noise_sigma: 0.001
+  sim_time_scale: 0.0
+  seed: 42

@@ -1,0 +1,24 @@
+batch_id: TEMP_X_PROFILE
+session: ../demo_cp/session.yaml
+max_workers: 2
+executor: thread
+output_dir: out/TEMP_X_PROFILE
+fail_fast: false
+# Kept intentionally small so the demo (and CI) runs in seconds. Drop the
+# `lot.wafers` / `wafer.diameter_mm` overrides for a full 300 mm, 2 wafer sweep.
+overrides:
+  run.sites: 4
+  run.seed: 20261021
+  lot.wafers: [W01]
+  wafer.diameter_mm: 150
+# 3 temperatures x 2 DUT profiles (nominal / degraded yield model) = 6 jobs
+sweep:
+  run.temperature: [-40, 25, 125]
+  dut_profile.yield.pass: [0.9, 0.75]
+retest:
+  bins: [3, 4]
+  max_retries: 1
+  on: [contact_fail]
+  keep: last
+aggregation:
+  cpk_tests: [1100, 2000, 2100, 2200]

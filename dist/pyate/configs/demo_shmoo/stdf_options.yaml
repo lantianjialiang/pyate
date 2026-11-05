@@ -1,0 +1,7 @@
+output_dir: out
+gzip: false
+byte_order: little
+cpu_type: 2
+write_wcr: false
+write_csv: true
+write_datalog: true

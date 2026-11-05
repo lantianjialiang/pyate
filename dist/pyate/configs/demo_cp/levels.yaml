@@ -1,0 +1,14 @@
+default_set: lv_nominal
+sets:
+- name: lv_nominal
+  vil: -0.3
+  vih: 2.0
+  vol: 0.2
+  voh: 2.8
+  vterm: 0.0
+  iol: 0.004
+  ioh: -0.004
+  vdd:
+    nom: 3.3
+    min: 2.7
+    max: 3.6

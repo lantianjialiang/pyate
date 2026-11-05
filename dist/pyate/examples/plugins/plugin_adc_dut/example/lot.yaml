@@ -1,0 +1,7 @@
+lot_id: LOT-EXT-0001
+sublot: A
+wafers: []
+flow:
+- EXT1
+trays: 1
+parts_per_tray: 20

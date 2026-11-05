@@ -1,0 +1,7 @@
+test_num,name,lo,hi,unit,scale,stage,temp_min,temp_max
+1000,continuity,,,V,0,*,-999,999
+2000,idd_static,0,600e-6,A,0,*,-999,999
+5000,adc_dnl_max,-1.0,1.0,LSB,0,*,-999,999
+5001,adc_inl_max,-1.5,1.5,LSB,0,*,-999,999
+5100,adc_offset,-8.0,8.0,LSB,0,*,-999,999
+5101,adc_gain,0.97,1.03,,0,*,-999,999

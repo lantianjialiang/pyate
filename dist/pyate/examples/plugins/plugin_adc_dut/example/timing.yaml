@@ -1,0 +1,9 @@
+default_set: tset_adc
+sets:
+- name: tset_adc
+  period_ns: 50.0
+  edges:
+    drive_on: 0.0
+    data: 5.0
+    return: 0.0
+    compare: 35.0
