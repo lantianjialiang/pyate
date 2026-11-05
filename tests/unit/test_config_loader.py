@@ -52,9 +52,9 @@ def test_binning_maps_fail_codes() -> None:
 
 
 def test_flow_node_requires_exactly_one_kind() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         FlowNode.model_validate({"item": "idd_static", "test_num": 2000, "group": "g"})
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         FlowNode.model_validate({"item": "idd_static"})  # missing test_num
     node = FlowNode.model_validate({"item": "idd_static", "test_num": 2000})
     assert node.kind() == "item"
@@ -122,7 +122,7 @@ def test_read_config_expands_env_defaults(tmp_path: Path, monkeypatch: pytest.Mo
 def test_session_spec_requires_file_references(tmp_path: Path) -> None:
     spec = SessionSpec.model_validate({"name": "x"})
     assert spec.program == "testprogram.yaml"  # defaults are filled in
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         SessionSpec.model_validate({"run": {"sites": "many"}})
     incomplete = tmp_path / "session.yaml"
     incomplete.write_text("name: broken\n", encoding="utf-8")

@@ -129,11 +129,11 @@ class SafeExpression:
                 raise ExpressionError(f"unsupported unary operator {type(node.op).__name__}")
             return func_u(self._eval(node.operand, names))
         if isinstance(node, ast.BoolOp):
-            values = [self._eval(item, names) for item in node.values]
+            values = (self._eval(item, names) for item in node.values)
             return all(values) if isinstance(node.op, ast.And) else any(values)
         if isinstance(node, ast.Compare):
             left = self._eval(node.left, names)
-            for op, comparator in zip(node.ops, node.comparators):
+            for op, comparator in zip(node.ops, node.comparators, strict=True):
                 func_c = _COMPARE_OPS.get(type(op))
                 if func_c is None:
                     raise ExpressionError(f"unsupported comparison {type(op).__name__}")

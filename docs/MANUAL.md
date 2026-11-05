@@ -121,16 +121,18 @@ Flow 顺序：
 
 ### 5.2 断点和单步
 
-执行器在**每个测试项开始之前**看暂停。断点记的是 test number，所有 site 共用。
+执行器在**每个测试项开始之前**看暂停。断点按 test number 记，所有 site 共用；命中一次就消费掉（one shot），所以点 **Resume** 会真的继续跑完，而不是在下一颗 die 的同一个测试上再停一次。
 
 1. 打开 **Run**。
-2. 断点框输入 `9000`，点 **Set**。标签变成 `breakpoints: 9000`。
-3. 点 **Start**。上一轮的 datalog、wafer、summary 和 shmoo 会先清掉。flow 跑完 2000 和 3000 后，在 9000 之前停下。日志里有一行 `breakpoint hit: test 9000 ...`。
-4. 点 **Step**：只执行接下来的一项（9000），然后再次暂停。再 Step 一次会跑 shmoo。
-5. 点 **Resume** 会放开暂停，一直跑到结束。**Pause** 是在下一项之前停住。**Stop** 放弃这一轮。**Clear data** 丢掉当前结果并停掉正在跑的那一轮；断点和 site 勾选不动。
-6. **Clear** 去掉全部断点。
+2. **break at** 下拉框列出当前 stage 的所有测试项（显示成 `9000  shmoo`，前一位是 test number），选中后点 **Arm**。标签变成 `breakpoints: 9000 (one shot)`。想用列表里没有的编号，也可以直接在框里输入数字再 Arm。
+3. 点 **Start**。上一轮的 datalog、wafer、summary 和 shmoo 会先清掉。flow 跑完 2000 和 3000 后，在 9000 之前停下：右边状态变成 `state: paused`，日志里有一行 `breakpoint at test 9000 shmoo - paused, press Resume to continue`，断点标签变成 `hit 9000 shmoo (site 1) - Resume to continue`。
+4. 点 **Step**：只执行接下来的一项（9000），然后再次暂停。再 Step 一次会跑后面的项。
+5. 点 **Resume** 继续，直到这一轮结束。**Pause** 是在下一项之前停住。**Stop** 放弃这一轮。**Clear data** 丢掉当前结果并停掉正在跑的那一轮；断点和 site 勾选不动。
+6. **Clear** 去掉全部断点（包括还没命中的）。
 
-想看“跑一项停一下”，也可以不设断点：Start 之后马上 Pause，然后反复 Step。
+停着的时候按钮会自动切成可用状态：**Resume** / **Step** 只在 `state: paused` 时可点，**Pause** 只在 running 时可点，**Start** 在跑的时候禁用。日志级别选 ALL（默认）才看得到断点那几行。
+
+想“跑一项停一下”，也可以不设断点：Start 之后马上 Pause，然后反复 Step。
 
 取消某个 site 的勾选（`S1`、`S2`……）再 Start，这些 site 不会测。这写入已有的 `run.disabled_sites`。`demo_intro` 只有 1 个 site。
 
@@ -140,9 +142,13 @@ Start 跑完后（大约几十秒，视机器而定）：
 
 - **Wafer**：每颗 die 的颜色是 soft bin，边缘的 die 也是完整的方块，不会被圆边裁成一块。鼠标停在 die 上可以看到坐标、bin，以及这颗的第一个失败测试和值。圆片底部只有一个很小的定位豁口。下面一条是 bin 比例。**Export wafer map PNG** 把当前图存成图片。
 - **Summary**：默认 **group by = test**，每个测试一行。改成 **site** 按 site 拆开，改成 **wafer** 按晶圆拆开（多片 wafer 时用 `demo_cp` 的 lot）。有数值的测试会列出 mean、stdev、min、max，以及规格 lo/hi、Cp、Cpk（Cp 要上下限都有，Cpk 有一边即可；σ 用样本标准差 n−1）。点一行，下面同时画该组的 histogram、trend 和 probability。三张图上的橙色虚线是 lower limit，红色虚线是 high limit；鼠标停在柱、点或限值线上会显示对应的值。probability 的横轴是测量值，纵轴是标准正态分位；灰色虚线是这组数据的正态参考线。
-- **Shmoo**：flow 里的 9100 跑完后这里出现 3×3 的 pass/fail 色块。横轴是 period（ns），纵轴是 VDD。悬停一个格子可以看到电平和周期。**PNG** / **CSV** 导出。
+- **Shmoo**：flow 里的 9100 跑完后这里出现 pass/fail 色块。横轴是 period（ns），纵轴是 VDD。悬停一个格子可以看到电平和周期。**PNG** / **CSV** 导出。想看一张真正的 shmoo（有速度边界，而不是一片同色），用 `configs\demo_shmoo\session.yaml`：它是 1 site、小晶圆、慢速 DUT，21×31 的扫描在 3.6 V 只需要 21 ns，到 2.75 V 却要 119 ns，所以边界斜着穿过整张图，2.7 V 以下是全红（供电不足）。
 
-不想把 shmoo 放进每一颗 die 时，从 flow 里取消勾选 9100，改用 Shmoo 页的 **Run shmoo**。它只用当前 session 的 DUT、电平和 pattern，在一个 site 上扫一次，不走整片晶圆。`demo_cp` 的默认 flow 就没有 shmoo，应该用这个按钮。
+不想把 shmoo 放进每一颗 die 时，从 flow 里取消勾选 9100，改用 Shmoo 页的 **Run shmoo**。它只用当前 session 的 DUT、电平和 pattern，在一个 site 上扫一次，不走整片晶圆。
+
+- **跑的是哪份配置**：当前 session、当前 stage 里第一个 `shmoo` 项。VDD/period 范围、pattern、cycle 数都取自那一项，色块上方那行灰字写明用的是哪套配置、哪个 stage、多大网格（例如 `demo_shmoo · CP1 · 21×31 grid · VDD 2.6–3.6 V · 8–128 ns · 32 cycles · nominal die`）。flow 里没有 shmoo 项时（`demo_cp`、`demo_intro`）才退回 items 的默认范围 2.7–3.6 V、10–120 ns。
+- **网格默认跟 flow 一致**：V / T / cyc 三个框在打开 session 时就填成那一项的值，点一下得到的图和整轮跑出来的分辨率相同；改这三个数才是自己缩小或放大网格。
+- **和整轮为什么可能不一样**：Run 页的图来自**最后一颗 die**，每颗 die 有自己的 `vth_shift`（按 `dut_profile.process.vth_sigma` 采样），边界会左右偏一点，`demo_shmoo` 的 21 颗落在 57.8–59.3% 之间；**Run shmoo** 用的是**标称 die**（不做 die-to-die 抖动），所以在同一个网格下它等于"中间那颗"，和具体某一颗略有差别。想看某一颗，就在 TestFlow 里选中 9100 用 **Run selected item**（见第 6 节），它和这个按钮用同一个标称 die，因此两者在相同网格下结果完全一致。
 
 ### 5.4 调试一条 pattern
 
@@ -159,13 +165,25 @@ Pattern 页不跑 flow，只对一个 `.pat` 做向量比较。
 
 ## 6. 界面上的其他页
 
-**Batch。** **Open...** 选择 `configs\demo_batch\batch.yaml`，**Load** 后 **Run batch**。每行是一组参数扫描。结束后 **Open output** 打开该任务的输出目录。
+**TestFlow 的排序。** 选中一个节点后点 **Move up** / **Move down**，节点移动后仍然保持选中（焦点也回到树上），可以连点，不用每次重新选。也可以直接拖拽，落点后的节点同样保持选中。
 
-**STDF。** **Open STDF...** 选择一次运行写出的 `.stdf`。上方是文件统计：lot、job、颗数、良率、每片 wafer 的 good/parts、hard/soft bin、各记录条数。下面的表和三张图与 Run 的 Summary 相同，也可以按 test、site、wafer 分组，数据来自文件里的 PTR/FTR，不是当前这次 GUI 运行。
+**TestFlow 里单独跑一项。** 选中一个测试项，右侧 **run one item** 里选 site（默认 site 1，也可以选 all sites 一次跑完所有 site），点 **Run selected item**。它只执行这一项：不勾 wafer、不 bin、不写 STDF，结果显示在 Run 页的 datalog 和 Summary（页签会自动切到 Run）。参数直接取右边表单里的**当前值**，不用先按 **Apply to node**，所以可以先改一个 cycle 数再点运行；文件不会被改写。默认勾着 **clear Run data first**：单跑一项的 samples 和整轮混在一起会把 Cpk 算错，想保留上一轮就取消勾选。跑完状态栏和 Run 页日志各有一行结果，右侧框里也留着，方便重复点。**Stop the run first**：整轮还在跑时这个按钮会拒绝执行。它用的也是标称 die，和 Shmoo 页的 **Run shmoo** 完全一致。
+
+**STDF。** **Open STDF...** 选择一次运行写出的 `.stdf`。最上面是一张统计卡片：文件路径、`lot / part / job / node / stage / temp` 一行、`parts / good / yield / retests / PTR / FTR` 六个大数字、hard/soft bin 芯片行，以及各记录条数。下面的表和三张图与 Run 的 Summary 相同，也可以按 test、site、wafer 分组，数据来自文件里的 PTR/FTR，不是当前这次 GUI 运行。good 与 yield 按 PRR 的 `PART_FLG`（0x08 = fail、0x10 = 未测）统计，和 run 汇总的口径一致。
+
+**插件。** 最后一个页签 **Plugins**（或菜单 Tools → Plugins...）。顶部一行是搜索路径：`PYATE_PLUGIN_PATH` 加上仓库（打包版是 exe 同级）的 `examples/plugins`。
+
+- **installed plugins** 表：plugin / status / api / contributes / source，contributes 是它注册的东西（`dut:adc`、`testitem:adc_inl_dnl`、`sink:json`）。选中一行，表下灰字显示这个插件的说明和注册清单。
+- **Disable / Enable**（右上）：立即把插件停用或启用。停用不只是不跑钩子，它注册的 DUT 模型、test item、sink 也一起从注册表撤掉（会顺带删掉全局注册，重新启用再加回来），所以 Run 页下一次跑就用新注册表；正在跑的那一轮不受影响。
+- **available in the search paths**：磁盘上有、还没加载的插件。双击一行或点 **Load selected** 加载；已经加载的显示 `loaded`，按钮变灰。
+- **Load file... / Load folder...**：加载任意 `.py` 或包目录（`src` 布局的插件项目目录也认）。**Reload all** 丢弃现有 manager 重新扫描，手工加载过的插件会被记住并重新加载。
+- 底部日志是 registry 的 note / warning / error；比如钩子方法忘了 `@hookimpl`，这里会直接告诉你它不会执行。
+
+插件的钩子输出（例如 `failwatch` 的失败清单）仍会写到 `<out>` 目录并出现在 Run 页日志。写法和完整例子见 README 的「插件」一节与 `docs/EXTENDING.md`。
 
 **日志。** Run 页最下面。级别可选 ALL、INFO、ERROR。断点命中、shmoo 开始和结束、运行结束都写在这里。
 
-**主题。** 打开时是浅色。菜单 View 里可以切到深色。状态栏右侧和 Help → About 是版权信息 © lantianjialiang。页签顺序是 Config、TestFlow、Limits/Bins、Run、Pattern、STDF，Batch 在最后。
+**主题。** 打开时是浅色（默认），菜单 View 里可以在浅色/深色之间切换，当前主题前面带勾。状态栏右侧和 Help → About 是版权信息 © lantianjialiang。页签顺序是 Config、TestFlow、Limits/Bins、Run、Pattern、STDF、Plugins。批量扫参（`batch.yaml`）没有界面，用命令行 `pyate batch`。
 
 多 site 的完整 CP 用 `configs\demo_cp\session.yaml`（300 mm、4 site）。FT、tray、卡料和重测用 `configs\demo_ft\session.yaml`，Run 页的 **Tray** 每个 site 一格，颜色是最近一颗的 bin，jam 会标出来。
 
@@ -201,13 +219,14 @@ pyate lot run configs\demo_cp\session.yaml --stages CP1 --stage-session FT1=conf
 
 GUI 的 Summary 是**这一轮已经收到的测量**的在线统计，按测试（以及可选的 site 或 wafer）汇总 mean、stdev 和 Cpk。它和 `summary.json` 里的 lot 级良率不是同一张表：lot 级看有多少颗 pass，测试级看某一个 test number 的分布。`stats.json` 是同一套 Cp/Cpk 写到文件里的版本。
 
-## 9. 三套示例怎么选
+## 9. 四套示例怎么选
 
 | 目录 | 什么时候用 |
 |---|---|
 | `configs/demo_intro` | 学 GUI：断点、pattern 调试、shmoo、summary。晶圆很小 |
 | `configs/demo_cp` | 看一片真实规模的 CP、wafer map 和 STDF。flow 里没有 shmoo |
 | `configs/demo_ft` | Handler、tray、contact fail 和重测 |
-| `configs/demo_batch` | 温度等参数的批量扫描 |
+| `configs/demo_shmoo` | 专门演示 shmoo：1 site、小晶圆、慢速 DUT，21×31 的 VDD × period 有一条斜的速度边界 |
+| `configs/demo_batch` | 温度等参数的批量扫描（命令行） |
 
 更长的字段说明、插件写法和 STDF 字段对照见 `docs/` 里的其他文档。

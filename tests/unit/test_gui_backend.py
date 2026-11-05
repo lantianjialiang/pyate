@@ -253,6 +253,9 @@ def test_breakpoint_pauses_before_the_item() -> None:
         time.sleep(0.02)
     assert pause.is_set()
     assert started == [1]
+    # a breakpoint is one shot, otherwise Resume would stop again on the
+    # next die and the run would look like it never continues
+    assert 2 not in executor.breakpoints
     generation["n"] = 1
     pause.clear()
     thread.join(2)

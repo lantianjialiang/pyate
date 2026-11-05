@@ -2,6 +2,8 @@
 
 格式：`[日期] 规格/任务 — 结果 — 验收/验证方式`
 
+- [2026-11-05 Review] 收尾多站点静态分支同步、历史分页/线程池复用、温度与数字采样、在线统计及有界 GUI 窗口；修复 Flow 短路求值、单元格残留失败颜色，补 SRAM 能力类型与插件类型 — 全量 431 项通过，最后 GUI 专项 51 项通过；Ruff 全项目通过、strict core 51 文件通过、正式核心行/分支覆盖率 86.33%。十万 part、8×1000 TD 三轮一致、百万行解析和真实 Qt Paint 探针已执行，限制与原始日志索引见 `VALIDATION_2026-11-05.md`。CI 85% 核心覆盖门禁已配置，远程尚未运行。
+
 - [阶段 1] `01_architecture.md` — 目录分层落地：`api/ → engine/ → testitems/ → hal|dut|pattern → config|datalog`；core 不 import gui，gui 只 import api/engine.events — `pytest tests/unit/test_layering.py`
 - [阶段 1] `01_architecture.md` — EventBus（同步/异步队列、订阅者异常隔离、`wait_idle`）+ EventKind 全量定义 — `tests/unit/test_events.py`
 - [阶段 2] `02_config_system.md` — pydantic v2 全量 schema、`include`/`includes`、`${ENV:default}`、`--set` 点号覆盖（含 section 级覆盖） — `tests/unit/test_config_loader.py`
@@ -39,3 +41,23 @@
 - [2026-11-04 Review 修复] B00/B01/B02/B04/B05/B06/B07/B08/B09/B12/B13 等核心路径已实施：修复示例、判定、限值、STDF、DUT 身份、SQLite 恢复及批量状态；部分任务尚有边界验收，详见 docs/IMPLEMENTATION_PROGRESS.md。
 - [2026-11-04 验证] 核心 strict mypy 51 文件无错误；HAL/恢复/插件/GUI 定向回归 84 项通过；收紧后的 PRR 时间及 TSR 统计可复现测试 5 项通过；正式全量结果另行记录。
 - [2026-11-04 最终回归] 本批修复全量 pytest（含离屏 GUI）347 项通过，耗时 384.14 秒；core strict mypy 51 文件无错误。未完成的 breakdown 验收项保留在 docs/IMPLEMENTATION_PROGRESS.md。
+- [2026-11-04 打包] 按 HEAD `505a595` 重建 Windows 独立包 `dist/pyate`：PyInstaller 6.22.3 + PySide6 6.12.0 + CPython 3.13.14（venv），`tools/build_windows.py` 产出 995 个文件 / 165 MB（`pyate.exe` 控制台 + `pyate-gui.exe` 窗口版，共享 `_internal`）。验证：`pyate.exe version`、`config validate configs/demo_cp/session.yaml`、2 site / W01 CP 冒烟（673 tested / 583 passed，与源码运行逐项一致）均通过；`pyate-gui.exe configs/demo_cp/session.yaml` 正常起窗口。
+- [2026-11-04 打包注意] PyInstaller 的 COLLECT 会先 `rmtree(dist/pyate)`，在受保护的沙箱里会触发批量删除确认而中断（只留下旧产物）。正确做法：先把旧目录 `mv dist/pyate dist/pyate.old` 再构建，让 COLLECT 无需删除已存在目录。
+- [2026-11-04 GUI] 删除 Batch 页签（`BatchPanel` + `BatchViewModel` + File → Open batch）；GUI 只剩 Config / TestFlow / Limits/Bins / Run / Pattern / STDF，批量扫参保留在 CLI `pyate batch`（E2E-BATCH 不受影响）
+- [2026-11-04 GUI 修复] TestFlow 的 Move up / Move down 每次都会 `refresh()` 重建整棵树，选中项与焦点一起丢，必须重新点节点才能再移一次；现在按 path（拖拽按 label）恢复选中并 `setFocus`，可以连点。顺带在首次加载/切 stage 时默认选中第一个节点，右侧参数面板不再是空的 — `tests/gui/test_gui_smoke.py`（新增 3 例）
+- [2026-11-04 修复] `CompositeModel` 现在把 `base_period_ns` / `vth_v` 等电气参数下传给 `CounterModel` / `ShiftRegModel`；此前 `dut_profile.params` 里这两个键对 composite 无效（`min_period` 永远按 12 ns / 2.0 V 算）— `tests/unit/test_dut_models.py`
+- [2026-11-04 新增] `configs/demo_shmoo`：1 site / 60 mm 小晶圆 / 慢速 DUT 的 shmoo 演示，21×31 的 VDD(2.6–3.6 V) × period(8–128 ns)，边界随 VDD 斜向移动、2.7 V 以下全红；Run → Shmoo 的 **Run shmoo** 会沿用 flow 里 shmoo 项的范围与 pattern（`panels._flow_shmoo_params`），默认网格 12×12 — `tests/component/test_testitems.py::test_demo_shmoo_config_shows_a_timing_boundary`、`tests/gui/test_gui_smoke.py::test_shmoo_button_uses_the_window_of_the_flow`
+- [2026-11-04 文档/截图] README 的界面表格换成 6 页签 + Shmoo 图；`tools/shoot_gui.py` 增加 `--shmoo`（渲染 Run → Shmoo），截图编号统一为 gui_1..gui_8，删除 batch 图；MANUAL/QUICKSTART 同步去掉 GUI Batch 说明
+- [2026-11-05 修复] Run 页 **Run shmoo** 与整轮结果对不上：V/T/cyc 的默认值（12×12/16）会盖掉 flow 的 21×31/32，且 DUT 带着随机 `vth_shift`。现在打开 session 就从 flow 同步网格，`run_shmoo` 改用标称 die（`create_dut(variation=False)`），页面上方写明用的是哪套配置/stage/范围 — `tests/component/test_testitems.py`（新增 2 例）、`tests/gui/test_gui_smoke.py::test_shmoo_button_uses_the_window_of_the_flow`
+- [2026-11-05 新增] TestFlow 右侧 **run one item**：选中测试项点 **Run selected item**，只执行这一项并把结果写进 Run 页 datalog / Summary（不发 PART_END，不动 wafer map 与 yield）；参数取表单当前值，可选 site 或 all sites，可先清空上一轮数据 — `src/pyate/api/item.py::run_item`、`FlowExecutor.run_single`、`tests/unit/test_item_api.py`（9 例）、`tests/gui/test_gui_smoke.py`（3 例）
+- [2026-11-05 GUI 修复] File 菜单里 `Open session...` 和 `Ctrl+O` 叠在一起：只设 `QMenu::item:selected` 时 Qt 按文本宽度算菜单宽度，没给快捷键留位置。给 `QMenu::item` 加 `padding: 5px 14px`（含 separator 样式），菜单宽度 147→164 px，深浅主题都正常 — `tests/gui/test_gui_smoke.py::test_menu_items_reserve_room_for_shortcuts`
+- [2026-11-05 GUI] 默认主题确认为 light（`MainWindow` / `create_window` / `pyate gui` / 打包入口一致）；View 菜单改成互斥可勾选项并跟随当前主题 — `test_theme_menu_tracks_the_light_default`
+- [2026-11-05 GUI 修复] STDF 页统计区从 6 行长文本改成卡片：路径 + lot 元信息 + 六个指标块 + hard/soft bin 芯片 + 记录条数，表格/图表空间随之变大；同时修正 `stdf_view` 的 `PART_FLG`/`TEST_FLG` 位（fail 0x08/0x80、未测 0x10、重测 0x01），此前的 yield 恒为 100%，现在 W01 显示 594/673 = 88.26% — `tests/gui/test_gui_smoke.py::test_stdf_panel_shows_compact_stats`
+- [2026-11-05 修复] Run 页断点：命中后每颗 die 都会再停一次、界面又没有任何提示，看起来"不起作用"。改成 one-shot（命中即从 set 移除）、新增 `EventKind.BREAKPOINT` 与 `state: running/paused/done` 显示、按钮可用性随状态切换、断点框改成列出当前 stage 测试项的下拉框 — `tests/unit/test_gui_backend.py::test_breakpoint_pauses_before_the_item`、`test_run_page_breakpoint_box_lists_the_flow`
+- [2026-11-05 新增] `pyate plugin list`（`--json` 可选）打印加载/注册/告警；新增可直接运行的钩子插件 `examples/plugins/failwatch.py`（失败结果写到 `<out>/fails.log`，实测 demo_cp W01 记录 331 条）；README 增加「插件」章节：环境变量加载、`plugin new` 脚手架、自定义 TestItem 的完整代码与配置引用 — `tests/unit/test_plugins.py`（新增 2 例）
+- [2026-11-05 修复] 断点状态同步原先挂在 `_render_tick()` 的渲染节流之后，命中瞬间界面可能还显示 `state: running` 且标签仍是 armed；把 `_sync_run_state()` 移到 `_tick()`，每 50 ms 都能反映 paused/命中 — `tests/gui/test_gui_smoke.py::test_run_panel_shows_the_breakpoint_hit`
+- [2026-11-05 新增] GUI 增加 **Plugins** 页签（Tools → Plugins...）：列出已加载插件的 status/api/contributes/source，选中看说明；可在页面里 **Load file... / Load folder... / Reload all**，对选中插件 **Disable/Enable**；下半区列出搜索路径里还没加载的插件，双击直接加载；底部是 registry 的 note/warning/error — `tests/gui/test_plugin_panel.py`（5 例）
+- [2026-11-05 新增] `pyate.api` 增 `plugin_report/scan_plugins/load_plugin/set_plugin_enabled/reload_plugins`；`plugins/discovery.py` 用 `ast` 扫描（不 import）单文件、包、`pyproject.toml` 项目三种布局；`PluginManager` 增 `unload/enable/describe/finalize`，卸载会回滚该插件注册的 dut/testitem/sink（同步撤销全局注册表）— `tests/unit/test_plugins.py`（新增 5 例）
+- [2026-11-05 修复] `load_dir` 不认 `pyproject.toml` + `<name>/__init__.py` 项目布局，加载 `examples/plugins` 只会得到 `failwatch.py`；`_check_versions` 用全局 hook 第一个返回值比较所有插件版本
+- [2026-11-05 文档/截图] README 新增「界面与使用」章节（打开窗口与快捷键、Config/TestFlow/Limits/Run 断点/Wafer-Summary-Shmoo-Tray/Pattern/STDF/Plugins 逐页走读、浅色深色对照、截图重建命令），并删掉旧的「界面」图库章节；特性表更正为 7 个页签 — README 内图片路径全部实测存在
+- [2026-11-05 工具] `tools/shoot_gui.py` 增 `--paused TEST_NUM`（下断点、等 `vm.paused_at`、截暂停态后 resume 跑完）与 `--run` 时的 Summary 截图；`RunPanel` 暴露 `wafer_page`/`summary_page` 供截图层选中子页 — 产出 `gui_10_summary.png`、`gui_11_paused.png`（深浅两套），并重新生成全部截图（此前一次不带 `--run` 的执行把 STDF/Run 图覆盖成了空状态）

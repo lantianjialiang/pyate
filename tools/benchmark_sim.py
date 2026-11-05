@@ -11,8 +11,10 @@ The parts probe uses SQLite recovery storage and no optional datalog sinks.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import hashlib
+import itertools
 import json
 import os
 import platform
@@ -23,7 +25,6 @@ import threading
 import time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-import itertools
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -199,10 +200,8 @@ def main() -> None:
     metadata = {"python": platform.python_version(), "os": platform.platform(),
                 "cpu": platform.processor(), "logical_cpus": os.cpu_count(), "dependencies": {}}
     for package in ("pydantic", "pytest", "PySide6-Essentials"):
-        try:
+        with contextlib.suppress(PackageNotFoundError):
             metadata["dependencies"][package] = version(package)
-        except PackageNotFoundError:
-            pass
     for label, command in (("commit", ["git", "rev-parse", "HEAD"]),
                            ("dirty_status", ["git", "status", "--porcelain"])):
         metadata[label] = subprocess.check_output(command, cwd=ROOT, text=True).strip()

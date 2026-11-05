@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from typing import Any
 
 from ..config.models import FlowNode
@@ -82,6 +83,19 @@ class FlowExecutor:
         self._log = logger or _LOG
 
     # ------------------------------------------------------------------ run
+    def run_single(self, ctx: SiteContext, node: FlowNode) -> list[TestResult]:
+        """Execute exactly one item node on ``ctx`` and return its results.
+
+        Debug helper: no flow walk, no binning, no part record. ``TEST_RESULT``
+        still goes out on the event bus, so a live datalog sees the value.
+        """
+        ctx.extra["pattern_loader"] = self.pattern_loader
+        # a single item never synchronizes with other sites, even when the
+        # executor was built for a multi-site run
+        self._barrier_active = False
+        self._run_item(node, ctx)
+        return list(ctx.results)
+
     def run_part(self, ctx: SiteContext, run_ctx: RunContext | None = None) -> PartResult:
         """Execute the flow on ``ctx`` and return the finished part."""
         ctx.extra["pattern_loader"] = self.pattern_loader
@@ -226,7 +240,14 @@ class FlowExecutor:
             return None
         stepping = self._consume_step()
         if test_num in set(self.breakpoints):
-            self._publish(EventKind.LOG, message=f"breakpoint hit: test {test_num} {name}",
+            # one shot: consume the breakpoint so Resume really continues the
+            # run instead of stopping again on the next die / part
+            self.breakpoints.discard(test_num)
+            self._publish(EventKind.BREAKPOINT, site=ctx.site_id, test_num=test_num,
+                          item=name, message=f"breakpoint: test {test_num} {name}")
+            self._publish(EventKind.LOG,
+                          message=f"breakpoint at test {test_num} {name} - paused, "
+                                  "press Resume to continue",
                           site=ctx.site_id, test_num=test_num)
             self.pause_event.set()
             self._wait_if_paused()
@@ -366,10 +387,8 @@ class FlowExecutor:
     def _leave_barrier(self) -> None:
         if getattr(self, "_barrier_active", False) and self.barrier is not None:
             self._barrier_active = False
-            try:
+            with suppress(Exception):  # pragma: no cover - defensive
                 self.barrier.leave()
-            except Exception:  # pragma: no cover - defensive
-                pass
 
     def _call_hook(self, name: str, **kwargs: Any) -> None:
         if self.hooks is None:

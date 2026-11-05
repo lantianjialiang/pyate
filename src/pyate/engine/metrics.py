@@ -51,9 +51,9 @@ class EquipmentStats:
         if float(jam_ms) > 0:
             self.jams += 1
             self.downtime_ms += float(jam_ms)
-        if not self._configured_ideal and int(tested) > 0 and float(test_ms) > 0:
-            if self.ideal_test_ms is None or float(test_ms) < self.ideal_test_ms:
-                self.ideal_test_ms = float(test_ms)
+        if (not self._configured_ideal and int(tested) > 0 and float(test_ms) > 0
+                and (self.ideal_test_ms is None or float(test_ms) < self.ideal_test_ms)):
+            self.ideal_test_ms = float(test_ms)
 
     @property
     def planned_ms(self) -> float:

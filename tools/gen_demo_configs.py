@@ -370,10 +370,175 @@ def build_ft() -> None:
     })
 
 
+def shmoo_program() -> dict[str, Any]:
+    """A characterization flow: two quick DC tests, a search, then the shmoo."""
+    return {
+        "program": "DEMO_SHMOO",
+        "revision": "1.0",
+        "flows": {
+            "CP1": [
+                {"item": "continuity", "test_num": 1000,
+                 "params": {"fail_code": 2}, "on_fail": {"action": "stop", "bin": 2}},
+                {"item": "idd_static", "test_num": 2000,
+                 "params": {"fail_code": 4}, "on_fail": {"action": "continue"}},
+                {"item": "fmax_search", "test_num": 4000,
+                 "params": {"pattern": "cnt_loop.pat", "period_min_ns": 4.0,
+                            "period_max_ns": 140.0, "resolution_ns": 1.0,
+                            "cycles": 64, "fail_code": 7},
+                 "on_fail": {"action": "continue"}},
+                {"item": "vdd_min_search", "test_num": 4100,
+                 "params": {"pattern": "cnt_loop.pat", "vdd_start": 3.6,
+                            "vdd_stop": 2.55, "resolution": 0.01, "cycles": 64,
+                            "fail_code": 7},
+                 "on_fail": {"action": "continue"}},
+                # 21 x 31 grid = 0.05 V x 4 ns, one strobe at 8 ns
+                {"item": "shmoo", "test_num": 9100,
+                 "params": {"pattern": "cnt_loop.pat",
+                            "vdd_min": 2.60, "vdd_max": 3.60, "vdd_steps": 21,
+                            "period_min_ns": 8.0, "period_max_ns": 128.0,
+                            "period_steps": 31, "cycles": 32,
+                            "min_pass_rate": 0.0, "fail_code": 7},
+                 "on_fail": {"action": "continue"}},
+            ],
+        },
+    }
+
+
+def build_shmoo() -> None:
+    """A one-site characterization demo whose shmoo has a visible boundary.
+
+    The DUT uses ``vth_v = 2.55 V`` and ``base_period_ns = 30 ns`` so the
+    minimum period grows from ~10 ns at 3.6 V to ~70 ns near the 2.7 V
+    minimum supply: the pass/fail boundary runs diagonally across the
+    8..128 ns window instead of hugging one edge.
+    """
+    directory = ROOT / "configs" / "demo_shmoo"
+    write_common(directory, sites=1)
+    write_patterns(directory)
+    # ``voh``/``vol`` are absolute levels in pyate, so the simulator default
+    # (VOH 2.8 V) would fail every cell below ~2.9 V for the wrong reason
+    # (output clipping, not speed). Scale them down so the picture is the
+    # timing boundary and not a vertical wall at the level limit.
+    dump(directory / "levels.yaml", {
+        "default_set": "lv_nominal",
+        "sets": [{
+            "name": "lv_nominal", "vil": -0.3, "vih": 2.0, "vol": 0.4, "voh": 2.0,
+            "vterm": 0.0, "iol": 0.004, "ioh": -0.004,
+            "vdd": {"nom": 3.3, "min": 2.6, "max": 3.6},
+        }],
+    })
+    dump(directory / "tester.yaml", {
+        "name": "SIM-ATE-SHM",
+        "model": "PYATE-SIM",
+        "num_sites_max": 8,
+        "digital_channels": 256,
+        "dps_channels": 16,
+        "pmu_channels": 64,
+        "max_vector_rate_mhz": 200.0,
+        "vector_depth": 1000000,
+        "overhead_ms": 0.4,
+        "simulation": {"noise_sigma": 0.002, "sim_time_scale": 0.0, "seed": 20261104},
+    })
+    dump(directory / "dut_profile.yaml", {
+        "model": "composite",
+        "params": {
+            "counter_bits": 8,
+            "shift_bits": 8,
+            "vdd_nom": 3.3,
+            "vdd_min": 2.72,
+            "vdd_max": 3.6,
+            "vth_v": 2.55,
+            "base_period_ns": 30.0,
+        },
+        # no random defects: the shmoo must come from timing, not from a
+        # dead die
+        "defects": [],
+        "yield": {"pass": 1.0, "edge_fail_boost": 1.0, "cluster_prob": 0.0},
+        "process": {"vth_sigma": 0.01, "idd_sigma": 0.02, "leak_sigma": 0.05},
+    })
+    dump(directory / "timing.yaml", {
+        # keep the ``tset_fast`` name: the generated patterns reference it
+        "default_set": "tset_fast",
+        "sets": [
+            # compare edge far beyond any period: the strobe lands at the end
+            # of the period, so shrinking the period is what breaks the die
+            # (a fixed strobe would just add a vertical wall at low VDD)
+            {"name": "tset_fast", "period_ns": 60.0,
+             "edges": {"drive_on": 0.0, "data": 3.0, "return": 0.0, "compare": 500.0}},
+            {"name": "tset_slow", "period_ns": 120.0,
+             "edges": {"drive_on": 0.0, "data": 3.0, "return": 0.0, "compare": 500.0}},
+        ],
+    })
+    dump(directory / "channel_map.yaml", channel_map(1))
+    dump(directory / "wafer.yaml", {
+        "diameter_mm": 60.0,
+        "die_size_mm": [10.0, 10.0],
+        "edge_exclusion_mm": 3.0,
+        "notch": "bottom",
+        "center_die": [0, 0],
+        "skip_list": [],
+    })
+    dump(directory / "prober.yaml", {
+        "index_time_ms": 400.0,
+        "layout": {"cols": 1, "rows": 1},
+        "wafer_change_time_s": 5.0,
+        "contact_fail_prob": 0.0,
+        "temperature": 25.0,
+        "scan": "serpentine",
+    })
+    # limits that match this DUT: it is a slow part (30 ns at 3.3 V -> the
+    # fmax search reports ~33 MHz), so the demo_cp 60 MHz floor cannot apply
+    with (directory / "limits.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["test_num", "name", "lo", "hi", "unit", "scale", "stage",
+                         "temp_min", "temp_max"])
+        writer.writerows([
+            ("2000", "idd_static", "0", "260e-6", "A", "0", "*", "0", "999"),
+            ("4000", "fmax", "25", "", "MHz", "0", "*", "-999", "999"),
+            ("4100", "vdd_min", "", "3.05", "V", "0", "*", "-999", "999"),
+        ])
+    dump(directory / "lot.yaml", {
+        "lot_id": "LOT-SHM-0001",
+        "sublot": "C",
+        "wafers": ["W01"],
+        "flow": ["CP1"],
+        "trays": 0,
+        "parts_per_tray": 0,
+    })
+    dump(directory / "testprogram.yaml", shmoo_program())
+    dump(directory / "session.yaml", {
+        "name": "demo_shmoo",
+        "description": "Shmoo demo: one site, 21x31 VDD x period characterization",
+        "program": "testprogram.yaml",
+        "tester": "tester.yaml",
+        "channel_map": "channel_map.yaml",
+        "loadboard": "loadboard.yaml",
+        "levels": "levels.yaml",
+        "timing": "timing.yaml",
+        "limits": "limits.csv",
+        "binning": "binning.yaml",
+        "dut_profile": "dut_profile.yaml",
+        "wafer": "wafer.yaml",
+        "lot": "lot.yaml",
+        "prober": "prober.yaml",
+        "stdf": "stdf_options.yaml",
+        "run": {
+            "stage": "CP1",
+            "sites": 1,
+            "seed": 20261104,
+            "output_dir": "out",
+            "parallel_mode": "sequential",
+            "disabled_sites": [],
+        },
+    })
+
+
 def main() -> None:
     build_cp()
     build_ft()
-    print("generated configs/demo_cp and configs/demo_ft")
+    build_shmoo()
+    print("generated configs/demo_cp, configs/demo_ft and configs/demo_shmoo")
+
 
 
 if __name__ == "__main__":

@@ -58,10 +58,12 @@ def test_report_is_json_friendly() -> None:
 
 
 def test_unknown_model_is_reported() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(KeyError, match="unknown DUT model"):
         run_pattern(PATTERN, model="no_such_model", max_cycles=10)
 
 
 def test_unknown_pattern_path_is_reported() -> None:
-    with pytest.raises(Exception):
+    from pyate.pattern.model import ParseError
+
+    with pytest.raises(ParseError, match="cannot read file"):
         run_pattern(CONFIGS / "demo_cp" / "patterns" / "missing.pat", model="composite")

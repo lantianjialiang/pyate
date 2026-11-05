@@ -19,3 +19,5 @@ venv/
 out/
 configs/*/out/
 examples/out/**/*.log
+/.workbuddy/memory/2026-11-04.md
+/.workbuddy/memory/2026-11-05.md

@@ -162,7 +162,7 @@ def expand_jobs(spec: BatchSpec) -> list[JobSpec]:
             index += 1
             overrides = dict(spec.overrides)
             labels: dict[str, str] = {}
-            for axis, value in zip(axes.names, combo):
+            for axis, value in zip(axes.names, combo, strict=True):
                 overrides[axis] = value
                 labels[axis] = str(value)
             slug = "_".join(_slug(value) for value in combo)

@@ -167,7 +167,7 @@ class RunViewModel:
         for kind in (EventKind.TEST_RESULT, EventKind.PART_END, EventKind.BIN_RESULT,
                      EventKind.PROGRESS, EventKind.UNIT_START, EventKind.UNIT_END,
                      EventKind.LOT_START, EventKind.LOT_END, EventKind.LOG,
-                     EventKind.ERROR, EventKind.TOUCHDOWN):
+                     EventKind.ERROR, EventKind.TOUCHDOWN, EventKind.BREAKPOINT):
             events.subscribe(kind, self.on_event)
         return self
 
@@ -178,7 +178,7 @@ class RunViewModel:
         for kind in (EventKind.TEST_RESULT, EventKind.PART_END, EventKind.BIN_RESULT,
                      EventKind.PROGRESS, EventKind.UNIT_START, EventKind.UNIT_END,
                      EventKind.LOT_START, EventKind.LOT_END, EventKind.LOG,
-                     EventKind.ERROR, EventKind.TOUCHDOWN):
+                     EventKind.ERROR, EventKind.TOUCHDOWN, EventKind.BREAKPOINT):
             self.events.unsubscribe(kind, self.on_event)
         self.events = None
 
@@ -224,6 +224,7 @@ class RunViewModel:
         self.running = False
         self.finished = False
         self.aborted = False
+        self.paused_at: dict[str, Any] | None = None
         self.error = ""
         self.last_event_seq = 0
         self._dirty = True
@@ -271,12 +272,21 @@ class RunViewModel:
         elif kind == EventKind.LOT_START.value:
             self.running = True
             self.finished = False
+            self.paused_at = None
         elif kind == EventKind.LOT_END.value:
             self.running = False
             self.finished = True
             self.aborted = bool(data.get("aborted", False))
         elif kind == EventKind.LOG.value:
             self._add_log("INFO", str(data.get("message", "")))
+        elif kind == EventKind.BREAKPOINT.value:
+            self.paused_at = {
+                "test_num": int(data.get("test_num") or 0),
+                "item": str(data.get("item") or ""),
+                "site": int(data.get("site") or 0),
+            }
+            self._add_log("INFO", str(data.get("message", "breakpoint hit")))
+            self.running = True
         elif kind == EventKind.ERROR.value:
             message = str(data.get("error") or data.get("message") or "")
             self._add_log("ERROR", message)
@@ -498,6 +508,7 @@ class RunViewModel:
             "running": self.running,
             "finished": self.finished,
             "aborted": self.aborted,
+            "paused_at": dict(self.paused_at) if self.paused_at else None,
             "error": self.error,
             "history_parts": len(self._history_keys),
             "history_evictions": self.history_evictions,

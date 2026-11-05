@@ -1,0 +1,4 @@
+test_num,name,lo,hi,unit,scale,stage,temp_min,temp_max
+2000,idd_static,0,260e-6,A,0,*,0,999
+4000,fmax,25,,MHz,0,*,-999,999
+4100,vdd_min,,3.05,V,0,*,-999,999

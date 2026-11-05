@@ -1,0 +1,18 @@
+model: composite
+params:
+  counter_bits: 8
+  shift_bits: 8
+  vdd_nom: 3.3
+  vdd_min: 2.72
+  vdd_max: 3.6
+  vth_v: 2.55
+  base_period_ns: 30.0
+defects: []
+yield:
+  pass: 1.0
+  edge_fail_boost: 1.0
+  cluster_prob: 0.0
+process:
+  vth_sigma: 0.01
+  idd_sigma: 0.02
+  leak_sigma: 0.05

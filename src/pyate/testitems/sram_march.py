@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from ..engine.context import SiteContext, TestResult
-from ..hal.base import HALBackend
+from ..hal.base import HALBackend, SRAMAccess
 from .base import TestItem, TestItemParams
 from .registry import register_testitem
 
@@ -27,7 +29,7 @@ class SramMarchItem(TestItem):
 
     def execute(self, ctx: SiteContext, hal: HALBackend) -> list[TestResult]:
         dut = ctx.dut or hal.dut(ctx.site_id)
-        if dut is None or not hasattr(dut, "sram_write"):
+        if dut is None or not hasattr(dut, "sram_write") or not hasattr(dut, "sram_read"):
             result = self.make_result(ctx, name="sram_march", value=None, kind="FTR")
             result.fail(self.params.fail_code)
             result.extra["error"] = "DUT has no SRAM model"
@@ -45,9 +47,9 @@ class SramMarchItem(TestItem):
         fail_got = 0
         operations = 0
 
-        assert dut is not None
-        reader = dut.sram_read
-        writer = dut.sram_write
+        memory = cast(SRAMAccess, dut)
+        reader = memory.sram_read
+        writer = memory.sram_write
 
         def write(address: int, data: int) -> None:
             nonlocal operations

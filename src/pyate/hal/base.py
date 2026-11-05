@@ -9,7 +9,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:  # pragma: no cover
     from ..dut.base import DUTModel
@@ -27,6 +27,14 @@ __all__ = [
     "SelfCheckError",
     "SiteResources",
 ]
+
+
+class SRAMAccess(Protocol):
+    """Optional behavioral memory capability used by March algorithms."""
+
+    def sram_read(self, address: int) -> int: ...
+
+    def sram_write(self, address: int, data: int) -> None: ...
 
 
 class HALError(Exception):

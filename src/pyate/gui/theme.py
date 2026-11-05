@@ -66,8 +66,10 @@ QComboBox QAbstractItemView { background: #14181c; color: #e6e6e6;
 QPushButton { background: #2f6feb; color: #ffffff; border: none; }
 QPushButton:disabled { background: #3a4149; color: #8b949e; }
 QPushButton#danger { background: #c0392b; }
+QPushButton#danger:disabled { background: #3a4149; color: #8b949e; }
 QTableWidget { background: #161a1f; alternate-background-color: #1b2026;
-    gridline-color: #2c333a; selection-background-color: #2f6feb; }
+    gridline-color: #2c333a; selection-background-color: #2f6feb;
+    selection-color: #ffffff; }
 QHeaderView::section { background: #262b31; color: #cfd6dd; border: none;
     border-right: 1px solid #2c333a; }
 QTreeWidget, QListWidget { background: #161a1f; alternate-background-color: #1b2026; }
@@ -81,10 +83,19 @@ QGroupBox { background: #22272d; }
 QGroupBox::title { color: #cfd6dd; }
 QMenuBar { background: #1a1e23; }
 QMenuBar::item:selected { background: #2f6feb; }
-QMenu { background: #1a1e23; border: 1px solid #333a42; }
+QMenu { background: #1a1e23; border: 1px solid #333a42; padding: 4px; }
+QMenu::item { padding: 5px 14px; }
 QMenu::item:selected { background: #2f6feb; }
+QMenu::separator { height: 1px; background: #333a42; margin: 4px 8px; }
 QStatusBar { background: #1a1e23; color: #cfd6dd; }
 QToolTip { background: #262b31; color: #e6e6e6; border: 1px solid #333a42; }
+QFrame#card { background: #22272d; border: 1px solid #333a42; border-radius: 8px; }
+QLabel#metric { font-size: 18px; font-weight: bold; color: #e6e6e6; }
+QLabel#metricName { font-size: 11px; color: #8b949e; }
+QLabel#filePath { color: #8b949e; }
+QLabel#muted { color: #8b949e; }
+QLabel#chip { background: #2c333a; border: 1px solid #3a4149; border-radius: 9px;
+    padding: 1px 8px; color: #cfd6dd; }
 """
 
 LIGHT = """
@@ -105,8 +116,10 @@ QComboBox QAbstractItemView { background: #ffffff; color: #1c1f23;
 QPushButton { background: #2f6feb; color: #ffffff; border: none; }
 QPushButton:disabled { background: #c6ccd3; color: #6b737b; }
 QPushButton#danger { background: #c0392b; }
+QPushButton#danger:disabled { background: #c6ccd3; color: #6b737b; }
 QTableWidget { background: #ffffff; alternate-background-color: #f2f4f7;
-    gridline-color: #e1e5ea; selection-background-color: #dbe8ff; }
+    gridline-color: #e1e5ea; selection-background-color: #dbe8ff;
+    selection-color: #1c1f23; }
 QHeaderView::section { background: #e9ecef; color: #33393f; border: none;
     border-right: 1px solid #e1e5ea; }
 QTreeWidget, QListWidget { background: #ffffff; alternate-background-color: #f7f9fb; }
@@ -120,10 +133,19 @@ QGroupBox { background: #ffffff; }
 QGroupBox::title { color: #33393f; }
 QMenuBar { background: #eef1f4; }
 QMenuBar::item:selected { background: #dbe8ff; color: #1c1f23; }
-QMenu { background: #ffffff; border: 1px solid #d7dbe0; }
+QMenu { background: #ffffff; border: 1px solid #d7dbe0; padding: 4px; }
+QMenu::item { padding: 5px 14px; }
 QMenu::item:selected { background: #dbe8ff; color: #1c1f23; }
+QMenu::separator { height: 1px; background: #e1e5ea; margin: 4px 8px; }
 QStatusBar { background: #eef1f4; color: #33393f; }
 QToolTip { background: #ffffff; color: #1c1f23; border: 1px solid #ccd2d8; }
+QFrame#card { background: #ffffff; border: 1px solid #dfe4ea; border-radius: 8px; }
+QLabel#metric { font-size: 18px; font-weight: bold; color: #1c1f23; }
+QLabel#metricName { font-size: 11px; color: #6b737b; }
+QLabel#filePath { color: #6b737b; }
+QLabel#muted { color: #6b737b; }
+QLabel#chip { background: #f2f5f9; border: 1px solid #d7dbe0; border-radius: 9px;
+    padding: 1px 8px; color: #33393f; }
 """
 
 
@@ -133,7 +155,7 @@ def stylesheet(theme: str = "light") -> str:
     base = DARK if not light else LIGHT
     return _COMMON % {
         "grid": "#e1e5ea" if light else "#2c333a",
-        "accent_hover": "#4b84f0" if not light else "#4b84f0",
+        "accent_hover": "#4b84f0",
     } + base
 
 

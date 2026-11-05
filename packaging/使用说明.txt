@@ -16,3 +16,17 @@ PyATE 独立程序（不需要安装 Python）
 
 示例配置在 configs\ 下，和开发仓库里的是同一套。输出写到运行时的 out\ 目录。
 默认浅色主题。深色：pyate-gui.exe --theme dark
+
+插件示例在 examples\plugins\ 下：plugin_adc_dut（ADC 模型 + INL/DNL 测试项）、
+plugin_json_sink（每颗 die 一行 JSONL 的 datalog sink）、failwatch.py（失败量测写到
+out 下的 fails.log）。GUI 的 Plugins 页可以直接加载/启停它们，不用设环境变量。
+
+命令行加载插件（以 failwatch 为例）：
+  PowerShell:
+    $env:PYATE_PLUGIN_PATH = "examples\plugins"
+    .\pyate.exe plugin list
+    .\pyate.exe run configs\demo_intro\session.yaml
+  cmd:
+    set PYATE_PLUGIN_PATH=examples\plugins
+    pyate.exe plugin list
+自己写的插件包 pip install -e 之后也会自动加载；写法见 README 的「插件」一节。

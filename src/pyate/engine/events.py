@@ -11,6 +11,7 @@ import queue
 import threading
 import time
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -37,6 +38,7 @@ class EventKind(str, Enum):
     BIN_RESULT = "BIN_RESULT"
     FLOW_STEP = "FLOW_STEP"
     PROGRESS = "PROGRESS"
+    BREAKPOINT = "BREAKPOINT"
     LOG = "LOG"
     ERROR = "ERROR"
 
@@ -166,10 +168,8 @@ class EventBus:
         worker = self._worker
         if worker is None:
             return
-        try:
+        with suppress(queue.Full):  # pragma: no cover
             self._queue.put(None, timeout=timeout)
-        except queue.Full:  # pragma: no cover
-            pass
         worker.join(timeout)
         self._worker = None
 

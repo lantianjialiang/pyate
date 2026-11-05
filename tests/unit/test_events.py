@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import FrozenInstanceError
 
 import pytest
 
@@ -112,7 +113,7 @@ def test_event_payload_is_immutable() -> None:
     bus.subscribe(EventKind.LOG, captured.append)
     payload = {"message": "x"}
     bus.publish(EventKind.LOG, payload)
-    with pytest.raises(Exception):
+    with pytest.raises(FrozenInstanceError):
         captured[0].kind = "OTHER"  # type: ignore[misc]
     assert captured[0].data == payload
 

@@ -31,8 +31,15 @@ class CompositeModel(DUTModel):
         self.shift_bits = int(raw.get("shift_bits", 8))
         super().__init__(params, rng)
         child_rng = random.Random(self.rng.randrange(1 << 30))
-        self._counter = CounterModel({"bits": self.counter_bits}, random.Random(child_rng.randrange(1 << 30)))
-        self._shift = ShiftRegModel({"bits": self.shift_bits}, random.Random(child_rng.randrange(1 << 30)))
+        # ``min_period_ns`` is the slowest of both blocks, so the blocks must
+        # run with the same electrical corner as the composite: without this
+        # a profile's ``base_period_ns`` / ``vth_v`` would be silently ignored
+        # (the children would fall back to their own defaults).
+        shared = {key: value for key, value in self.params.items() if key != "bits"}
+        self._counter = CounterModel({**shared, "bits": self.counter_bits},
+                                     random.Random(child_rng.randrange(1 << 30)))
+        self._shift = ShiftRegModel({**shared, "bits": self.shift_bits},
+                                    random.Random(child_rng.randrange(1 << 30)))
         self._counter.power(self.vdd_nom)
         self._shift.power(self.vdd_nom)
         self._sync_outputs()

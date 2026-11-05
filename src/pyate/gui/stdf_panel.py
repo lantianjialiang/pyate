@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -21,6 +24,35 @@ from .widgets import HistogramWidget, ProbabilityWidget, TrendWidget
 
 __all__ = ["StdfPanel"]
 
+#: Metrics shown as tiles above the table: (caption, key).
+_METRICS = (
+    ("parts", "parts"),
+    ("good", "good"),
+    ("yield", "yield"),
+    ("retests", "retests"),
+    ("PTR", "ptr"),
+    ("FTR", "ftr"),
+)
+
+
+class _MetricTile(QWidget):
+    """One big number with a caption underneath."""
+
+    def __init__(self, caption: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 22, 0)
+        layout.setSpacing(0)
+        self.value = QLabel("-")
+        self.value.setObjectName("metric")
+        self.caption = QLabel(caption)
+        self.caption.setObjectName("metricName")
+        layout.addWidget(self.value)
+        layout.addWidget(self.caption)
+
+    def set_value(self, text: str) -> None:
+        self.value.setText(text)
+
 
 class StdfPanel(QWidget):
     """Open an STDF file, show its lot statistics, and summarise the tests."""
@@ -29,6 +61,7 @@ class StdfPanel(QWidget):
         super().__init__(parent)
         self.vm = RunViewModel()
         self._keys: list[tuple[int, int | None, str | None]] = []
+        self._chips: list[tuple[QHBoxLayout, QWidget]] = []
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
@@ -46,10 +79,7 @@ class StdfPanel(QWidget):
         bar.addStretch(1)
         layout.addLayout(bar)
 
-        self.stats = QLabel("no STDF file")
-        self.stats.setWordWrap(True)
-        self.stats.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        layout.addWidget(self.stats)
+        layout.addWidget(self._build_card())
 
         self.table = QTableWidget(0, len(SUMMARY_COLUMNS))
         self.table.setHorizontalHeaderLabels(SUMMARY_COLUMNS)
@@ -62,7 +92,7 @@ class StdfPanel(QWidget):
         self.table.setColumnWidth(4, 140)
         self.table.itemSelectionChanged.connect(self._paint)
         _mono(self.table)
-        layout.addWidget(self.table, 2)
+        layout.addWidget(self.table, 3)
 
         charts = QHBoxLayout()
         self.histogram = HistogramWidget()
@@ -75,14 +105,92 @@ class StdfPanel(QWidget):
             column.addWidget(QLabel(title))
             column.addWidget(widget, 1)
             charts.addLayout(column, 1)
-        layout.addLayout(charts, 1)
+        layout.addLayout(charts, 2)
 
+    # -------------------------------------------------------------------- ui
+    def _build_card(self) -> QFrame:
+        """File header: path, lot meta, metric tiles and bin chips."""
+        card = QFrame()
+        card.setObjectName("card")
+        box = QVBoxLayout(card)
+        box.setContentsMargins(14, 10, 14, 10)
+        box.setSpacing(6)
+
+        self.path_label = QLabel("no STDF file")
+        self.path_label.setObjectName("filePath")
+        self.path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.addWidget(self.path_label)
+
+        self.meta_label = QLabel("")
+        self.meta_label.setObjectName("muted")
+        self.meta_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.addWidget(self.meta_label)
+
+        metrics = QHBoxLayout()
+        metrics.setSpacing(10)
+        self.tiles: dict[str, _MetricTile] = {
+            key: _MetricTile(caption) for caption, key in _METRICS
+        }
+        for tile in self.tiles.values():
+            metrics.addWidget(tile)
+        metrics.addStretch(1)
+        box.addLayout(metrics)
+
+        self.hard_row = self._bin_row("hard bins")
+        self.soft_row = self._bin_row("soft bins")
+        box.addLayout(self.hard_row)
+        box.addLayout(self.soft_row)
+
+        self.records_label = QLabel("")
+        self.records_label.setObjectName("muted")
+        self.records_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        box.addWidget(self.records_label)
+        return card
+
+    def _bin_row(self, title: str) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        label = QLabel(title)
+        label.setObjectName("muted")
+        label.setMinimumWidth(72)
+        row.addWidget(label)
+        row.addStretch(1)
+        return row
+
+    def _clear_chips(self) -> None:
+        while self._chips:
+            row, chip = self._chips.pop()
+            row.removeWidget(chip)
+            chip.deleteLater()
+
+    def _fill_bins(self, row: QHBoxLayout, entries: list[dict[str, Any]]) -> None:
+        for entry in entries[:8]:
+            name = str(entry.get("name") or "")
+            text = f"bin {entry.get('bin')}"
+            if name:
+                text += f"  {name}"
+            text += f"  {entry.get('count')}"
+            chip = QLabel(text)
+            chip.setObjectName("chip")
+            chip.setToolTip(text)
+            row.insertWidget(row.count() - 1, chip)
+            self._chips.append((row, chip))
+        if len(entries) > 8:
+            chip = QLabel(f"+{len(entries) - 8} more")
+            chip.setObjectName("chip")
+            row.insertWidget(row.count() - 1, chip)
+            self._chips.append((row, chip))
+
+    # ------------------------------------------------------------------ file
     def open_file(self) -> None:
-        """Load an STDF file and rebuild the summary from its PTR/FTR records."""
+        """Ask for an STDF file and load it."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Open STDF", "", "STDF (*.stdf *.stdf.gz *.std *.gz)")
-        if not path:
-            return
+        if path:
+            self.load_file(path)
+
+    def load_file(self, path: str) -> None:
+        """Load an STDF file and rebuild the summary from its PTR/FTR records."""
         report = inspect_stdf(path)
         self.vm.reset()
         for row in report["measurements"]:
@@ -97,10 +205,44 @@ class StdfPanel(QWidget):
                 lo=row.get("lo"),
                 hi=row.get("hi"),
             )
-        self.stats.setText(_format_stats(report))
+        self._show_stats(report)
         self._keys = []
         self._fill()
 
+    def _show_stats(self, report: dict[str, Any]) -> None:
+        self.path_label.setText(str(report.get("path", "")))
+        self._clear_chips()
+        if report.get("errors"):
+            self.meta_label.setText("\n".join(str(item) for item in report["errors"]))
+            self.path_label.setStyleSheet("color: #c0392b;")
+            for tile in self.tiles.values():
+                tile.set_value("-")
+            self.records_label.setText("")
+            return
+        self.path_label.setStyleSheet("")
+        stats = report["stats"]
+        self.meta_label.setText(
+            f"lot {stats['lot_id'] or '-'}   part {stats['part_typ'] or '-'}   "
+            f"job {stats['job_nam'] or '-'}   node {stats['node_nam'] or '-'}   "
+            f"stage {stats['test_cod'] or '-'}   temp {stats['tst_temp'] or '-'}"
+        )
+        values = {
+            "parts": str(stats["parts"]),
+            "good": str(stats["good"]),
+            "yield": f"{stats['yield_pct']:.2f} %",
+            "retests": str(stats["retests"]),
+            "ptr": str(stats["ptr_count"]),
+            "ftr": str(stats["ftr_count"]),
+        }
+        for key, text in values.items():
+            self.tiles[key].set_value(text)
+        self._fill_bins(self.hard_row, list(stats["hard_bins"]))
+        self._fill_bins(self.soft_row, list(stats["soft_bins"]))
+        records = "   ".join(
+            f"{name} {count}" for name, count in stats["record_counts"].items())
+        self.records_label.setText(f"records: {records}" if records else "")
+
+    # ----------------------------------------------------------------- table
     def _fill(self) -> None:
         rows = self.vm.summary_rows(groups=self.group_by.groups())
         selected = self.table.currentRow()
@@ -159,36 +301,3 @@ class StdfPanel(QWidget):
         self.histogram.set_bins(self.vm.histogram(test_num, site=site_id, wafer=wafer_id, part=part_id))
         self.trend.set_values(self.vm.trend(test_num, site_id, wafer_id, part_id))
         self.probability.set_points(self.vm.probability(test_num, site_id, wafer_id, part_id))
-
-
-def _format_stats(report: dict) -> str:
-    """One block of file-level STDF statistics, above the per-test table."""
-    if report.get("errors"):
-        return f"{report.get('path', '')}\n" + "\n".join(str(item) for item in report["errors"])
-    stats = report["stats"]
-    wafers = ", ".join(
-        f"{row['wafer_id'] or '(none)'} {row['good']}/{row['parts']}"
-        for row in stats["wafers"]
-    ) or "-"
-    hard = ", ".join(
-        f"{row['bin']} {row['name'] or ''} {row['count']}".strip()
-        for row in stats["hard_bins"]
-    ) or "-"
-    soft = ", ".join(
-        f"{row['bin']} {row['name'] or ''} {row['count']}".strip()
-        for row in stats["soft_bins"]
-    ) or "-"
-    records = " ".join(f"{name}={count}" for name, count in stats["record_counts"].items())
-    return (
-        f"{report['path']}\n"
-        f"lot {stats['lot_id'] or '-'}   part {stats['part_typ'] or '-'}   "
-        f"job {stats['job_nam'] or '-'}   node {stats['node_nam'] or '-'}   "
-        f"stage {stats['test_cod'] or '-'}   temp {stats['tst_temp'] or '-'}\n"
-        f"parts {stats['parts']}   good {stats['good']}   "
-        f"yield {stats['yield_pct']:.2f} %   retests {stats['retests']}   "
-        f"PTR {stats['ptr_count']}   FTR {stats['ftr_count']}\n"
-        f"wafers: {wafers}\n"
-        f"hard bins: {hard}\n"
-        f"soft bins: {soft}\n"
-        f"records: {records}"
-    )

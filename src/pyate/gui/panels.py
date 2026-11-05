@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from pathlib import Path
 from typing import Any
@@ -39,7 +38,7 @@ from PySide6.QtWidgets import (
 from ..api import ConfigProblem, EventBus, RunHandle, RunOptions, Session, run_shmoo
 from .editors import FileEditor
 from .theme import bins_colors
-from .viewmodels import BatchViewModel, ConfigViewModel, RunViewModel
+from .viewmodels import ConfigViewModel, RunViewModel
 from .widgets import (
     BinBarWidget,
     HistogramWidget,
@@ -52,7 +51,6 @@ from .widgets import (
 )
 
 __all__ = [
-    "BatchPanel",
     "ConfigPanel",
     "FlowPanel",
     "LimitsPanel",
@@ -92,6 +90,64 @@ def _fmt_stat(value: float | None) -> str:
     return _fmt_num(value)
 
 
+def _flow_shmoo(path: str) -> tuple[str, dict[str, Any]] | None:
+    """Stage and parameters of the first ``shmoo`` node of a session's flow.
+
+    The Shmoo page runs one characterization pass without walking the wafer, so
+    it is not bound to the flow. Seeding it from the flow keeps the quick
+    button on the same VDD/period window *and* the same grid as the program
+    (``configs/demo_shmoo`` exists for exactly that). ``None`` when the flow
+    has no shmoo item.
+    """
+    try:
+        loaded = Session(path).load()
+        nodes = list(loaded.program.flow(loaded.run.stage))
+    except (ConfigProblem, KeyError, OSError):
+        return None
+    while nodes:
+        node = nodes.pop(0)
+        if node.item == "shmoo":
+            return str(loaded.run.stage), dict(node.params)
+        branch = getattr(node, "branch", None)
+        if branch is not None:
+            nodes.extend(branch.then or [])
+            nodes.extend(branch.else_ or [])
+        loop = getattr(node, "loop", None)
+        if loop is not None:
+            nodes.extend(loop.items or [])
+        nodes.extend(node.items or [])
+    return None
+
+
+def _flow_shmoo_params(path: str) -> dict[str, Any]:
+    """Parameters of the flow's shmoo item (``{}`` when there is none)."""
+    found = _flow_shmoo(path)
+    return found[1] if found else {}
+
+
+def _flow_item_numbers(nodes: list[Any]) -> list[tuple[int, str]]:
+    """``(test_num, item)`` of every test item node, in flow order."""
+    found: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    stack = list(nodes)
+    while stack:
+        node = stack.pop(0)
+        if node.item:
+            test_num = int(node.test_num or 0)
+            if test_num not in seen:
+                seen.add(test_num)
+                found.append((test_num, str(node.item)))
+        branch = getattr(node, "branch", None)
+        if branch is not None:
+            stack.extend(branch.then or [])
+            stack.extend(branch.else_ or [])
+        loop = getattr(node, "loop", None)
+        if loop is not None:
+            stack.extend(loop.items or [])
+        stack.extend(node.items or [])
+    return found
+
+
 SUMMARY_COLUMNS = [
     "test", "name", "site", "wafer", "part", "n", "pass", "fail",
     "mean", "stdev", "min", "max", "lo", "hi", "cp", "cpk",
@@ -124,11 +180,11 @@ class SortCell(QTableWidgetItem):
     """Table cell that sorts by the value stored in ``UserRole``."""
 
     def __lt__(self, other: QTableWidgetItem) -> bool:
-        left = self.data(Qt.UserRole)
-        right = other.data(Qt.UserRole)
-        if isinstance(left, (int, float)) and isinstance(right, (int, float)):
-            if not isinstance(left, bool) and not isinstance(right, bool):
-                return float(left) < float(right)
+        left = self._sort_value if hasattr(self, "_sort_value") else self.data(Qt.UserRole)
+        right = other._sort_value if hasattr(other, "_sort_value") else other.data(Qt.UserRole)
+        if (isinstance(left, (int, float)) and isinstance(right, (int, float))
+                and not isinstance(left, bool) and not isinstance(right, bool)):
+            return float(left) < float(right)
         return (self.text() or "") < (other.text() or "")
 
 
@@ -174,9 +230,13 @@ def _put_cell(table: QTableWidget, row: int, column: int, text: str,
         item = SortCell(text)
         item.setFlags(item.flags() & ~Qt.ItemIsEditable)
         table.setItem(row, column, item)
-    elif item.text() != text:
+    elif getattr(item, "_display_text", None) != text:
         item.setText(text)
-    item.setData(Qt.UserRole, sort_value if sort_value is not None else text)
+    item._display_text = text
+    value = sort_value if sort_value is not None else text
+    if getattr(item, "_sort_value", None) != value:
+        item.setData(Qt.UserRole, value)
+        item._sort_value = value
     return item
 
 
@@ -402,6 +462,8 @@ class _FlowTree(QTreeWidget):
 class FlowPanel(QWidget):
     """Tree view of the test flow: enable, reorder, edit params and on_fail."""
 
+    runItemRequested = Signal(object)
+
     def __init__(self, vm: ConfigViewModel, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.vm = vm
@@ -463,6 +525,23 @@ class FlowPanel(QWidget):
         apply.clicked.connect(self._apply_node)
         fail_form.addRow("", apply)
         side_layout.addWidget(fail_box)
+
+        item_box = QGroupBox("run one item")
+        item_form = QFormLayout(item_box)
+        self.item_site = QComboBox()
+        self.item_site.addItem("all sites", 0)
+        self.item_site.addItem("site 1", 1)
+        item_form.addRow("site", self.item_site)
+        self.item_clear = QCheckBox("clear Run data first")
+        self.item_clear.setChecked(True)
+        item_form.addRow("", self.item_clear)
+        self.item_button = QPushButton("Run selected item")
+        self.item_button.clicked.connect(self.run_selected_item)
+        item_form.addRow("", self.item_button)
+        self.item_status = QLabel("no item run yet")
+        self.item_status.setWordWrap(True)
+        item_form.addRow("", self.item_status)
+        side_layout.addWidget(item_box)
         side_layout.addStretch(1)
         splitter.addWidget(side)
         splitter.setSizes([640, 320])
@@ -488,6 +567,10 @@ class FlowPanel(QWidget):
             self._add_node(self.tree, node, [index])
         self._loading = False
         self.info.setText(f"{len(nodes)} top level node(s)")
+        # an empty parameters box looks broken; the first node is a sensible
+        # default until the user clicks one (never steal the keyboard focus)
+        if self.tree.currentItem() is None and self.tree.topLevelItemCount():
+            self._select_path([0], focus=False)
 
     def _add_node(self, parent: Any, node: dict[str, Any], path: list[int]) -> None:
         label = node.get("label", "")
@@ -522,10 +605,43 @@ class FlowPanel(QWidget):
         path = item.data(0, Qt.UserRole) if item is not None else None
         if not path or not stage:
             return
+        target = [int(part) for part in path]
+        target[-1] += delta
         if not self.vm.move_flow(stage, list(path), delta):
+            # the tree is not rebuilt when the move is refused, but the button
+            # stole the focus: hand it back so arrow keys keep working
+            self._select_path(list(path))
             return
         self._persist()
         self.refresh()
+        # ``refresh`` rebuilds every item, so the selection (and with it the
+        # focus) is gone. Put it back on the node that just moved, otherwise
+        # every click of Move up/down needs a new click on the tree first.
+        self._select_path(target)
+
+    def _item_at(self, path: list[int]) -> QTreeWidgetItem | None:
+        """Return the item addressed by a ``UserRole`` path of child indexes."""
+        parent: QTreeWidgetItem | None = None
+        item: QTreeWidgetItem | None = None
+        for index in path:
+            count = (parent.childCount() if parent is not None
+                     else self.tree.topLevelItemCount())
+            if index < 0 or index >= count:
+                return None
+            item = parent.child(index) if parent is not None else self.tree.topLevelItem(index)
+            parent = item
+        return item
+
+    def _select_path(self, path: list[int], *, focus: bool = True) -> None:
+        """Select (and optionally focus) one node after the tree was rebuilt."""
+        item = self._item_at(path)
+        if item is None:
+            return
+        self.tree.setCurrentItem(item)
+        item.setSelected(True)
+        self.tree.scrollToItem(item)
+        if focus:
+            self.tree.setFocus(Qt.OtherFocusReason)
 
     def _on_drop(self) -> None:
         stage = self.stage_box.currentText()
@@ -550,10 +666,11 @@ class FlowPanel(QWidget):
                 QTimer.singleShot(0, self.refresh)
                 return
             order.append(int(parts[-1]))
-        captured = (stage, list(parent_path or []), list(order))
+        captured = (stage, list(parent_path or []), list(order), item.text(0))
         QTimer.singleShot(0, lambda: self._finish_drop(*captured))
 
-    def _finish_drop(self, stage: str, parent_path: list[int], order: list[int]) -> None:
+    def _finish_drop(self, stage: str, parent_path: list[int], order: list[int],
+                     label: str) -> None:
         result = self.vm.reorder_flow(stage, parent_path, order)
         if not result.ok:
             self.info.setText(result.text)
@@ -561,6 +678,17 @@ class FlowPanel(QWidget):
             return
         self._persist()
         self.refresh()
+        self._select_label(parent_path, label)
+
+    def _select_label(self, parent_path: list[int], label: str) -> None:
+        """Select the child of ``parent_path`` whose label is ``label``."""
+        parent = self._item_at(parent_path) if parent_path else None
+        count = parent.childCount() if parent is not None else self.tree.topLevelItemCount()
+        for index in range(count):
+            child = parent.child(index) if parent is not None else self.tree.topLevelItem(index)
+            if child.text(0) == label:
+                self._select_path([*parent_path, index])
+                return
 
     def _on_select(self) -> None:
         item = self.tree.currentItem()
@@ -628,10 +756,62 @@ class FlowPanel(QWidget):
             return
         self._persist()
         self.refresh()
+        self._select_path(list(path))
 
     def _persist(self) -> None:
         result = self.vm.save_program()
         self.info.setText(result.text)
+
+    # ------------------------------------------------------------ single item
+    def set_sites(self, count: int) -> None:
+        """Offer the site numbers this session can use."""
+        current = self.item_site.currentData()
+        self.item_site.blockSignals(True)
+        self.item_site.clear()
+        self.item_site.addItem("all sites", 0)
+        for site in range(1, max(1, int(count)) + 1):
+            self.item_site.addItem(f"site {site}", site)
+        index = self.item_site.findData(current)
+        # ``all sites`` is handy for a multi site debug, but one site keeps the
+        # datalog readable, so that is the default
+        self.item_site.setCurrentIndex(index if index > 0 else min(1, self.item_site.count() - 1))
+        self.item_site.blockSignals(False)
+
+    def set_item_status(self, text: str, *, busy: bool = False) -> None:
+        """Show the outcome of the last single item run."""
+        self.item_status.setText(text)
+        self.item_button.setEnabled(not busy)
+
+    def run_selected_item(self) -> None:
+        """Ask the window to run the selected node on its own."""
+        item = self.tree.currentItem()
+        node = item.data(0, Qt.UserRole + 1) if item is not None else None
+        if not node:
+            self.set_item_status("select a test item first")
+            return
+        if node.get("kind") != "item":
+            self.set_item_status("only a test item can run on its own")
+            return
+        label = str(node.get("label") or "")
+        params: dict[str, Any] | None = None
+        if self._param_widgets:
+            # what the form shows wins over the saved program: tweaking a value
+            # and pressing "Run selected item" must use the tweaked value
+            schema = self.vm.item_schema(label)
+            params = {}
+            for name, prop in (schema.get("properties") or {}).items():
+                value = _read_param(self._param_widgets.get(name), prop)
+                if value is not None:
+                    params[name] = value
+        self.set_item_status(f"running {label} ...", busy=True)
+        self.runItemRequested.emit({
+            "name": label,
+            "test_num": int(node.get("test_num") or 0),
+            "stage": self.stage_box.currentText(),
+            "site": int(self.item_site.currentData() or 0),
+            "clear": self.item_clear.isChecked(),
+            "params": params,
+        })
 
     def disabled_items(self) -> list[str]:
         """Labels of the unchecked nodes."""
@@ -863,6 +1043,8 @@ class RunPanel(QWidget):
         self.output_dir: str | None = None
         self.extra_overrides: dict[str, Any] = {}
         self.breakpoints: set[int] = set()
+        self._session: Session | None = None
+        self._bp_hit: dict[str, Any] | None = None
         self._log_level = "ALL"
         # geometry of the current session, used to scale the wafer map
         self.wafer_size = 300.0
@@ -881,9 +1063,12 @@ class RunPanel(QWidget):
         layout.setSpacing(8)
 
         controls = QGroupBox("run control")
-        form = QHBoxLayout(controls)
+        control_box = QVBoxLayout(controls)
+        control_box.setSpacing(6)
+        form = QHBoxLayout()
         form.addWidget(QLabel("stage:"))
         self.stage_box = QComboBox()
+        self.stage_box.currentTextChanged.connect(lambda _t: self._sync_breakpoint_choices())
         form.addWidget(self.stage_box)
         form.addWidget(QLabel("sites:"))
         self.sites_spin = QSpinBox()
@@ -897,32 +1082,48 @@ class RunPanel(QWidget):
         self.start_btn = QPushButton("Start")
         self.start_btn.clicked.connect(self.start_run)
         self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setToolTip("Pause before the next test item")
         self.pause_btn.clicked.connect(self.pause_run)
         self.resume_btn = QPushButton("Resume")
+        self.resume_btn.setToolTip("Continue a paused run (also after a breakpoint)")
         self.resume_btn.clicked.connect(self.resume_run)
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setObjectName("danger")
         self.stop_btn.clicked.connect(self.stop_run)
         self.step_btn = QPushButton("Step")
+        self.step_btn.setToolTip("Run exactly one test item, then pause again")
         self.step_btn.clicked.connect(self.step_run)
         self.clear_btn = QPushButton("Clear data")
         self.clear_btn.clicked.connect(self.clear_results)
         for widget in (self.start_btn, self.pause_btn, self.resume_btn,
                        self.step_btn, self.stop_btn, self.clear_btn):
             form.addWidget(widget)
-        form.addWidget(QLabel("break"))
-        self.bp_spin = QSpinBox()
-        self.bp_spin.setRange(0, 1_000_000)
-        form.addWidget(self.bp_spin)
-        bp_add = QPushButton("Set")
+        form.addStretch(1)
+        self.state_label = QLabel("state: idle")
+        self.state_label.setObjectName("stat")
+        form.addWidget(self.state_label)
+        control_box.addLayout(form)
+
+        break_row = QHBoxLayout()
+        break_row.addWidget(QLabel("break at:"))
+        self.bp_box = QComboBox()
+        self.bp_box.setEditable(True)
+        self.bp_box.setMinimumWidth(190)
+        self.bp_box.setToolTip(
+            "Test item to stop before (test number + name); armed for one hit")
+        break_row.addWidget(self.bp_box)
+        bp_add = QPushButton("Arm")
+        bp_add.setToolTip("Pause before this item once, then continue with Resume")
         bp_add.clicked.connect(self._add_breakpoint)
         bp_clear = QPushButton("Clear")
+        bp_clear.setToolTip("Disarm every breakpoint")
         bp_clear.clicked.connect(self._clear_breakpoints)
-        form.addWidget(bp_add)
-        form.addWidget(bp_clear)
+        break_row.addWidget(bp_add)
+        break_row.addWidget(bp_clear)
         self.bp_label = QLabel("breakpoints: none")
-        form.addWidget(self.bp_label)
-        form.addStretch(1)
+        break_row.addWidget(self.bp_label)
+        break_row.addStretch(1)
+        control_box.addLayout(break_row)
         layout.addWidget(controls)
 
         self.site_checks: list[QCheckBox] = []
@@ -996,8 +1197,10 @@ class RunPanel(QWidget):
         export.clicked.connect(self.export_wafer_map)
         map_layout.addWidget(export)
         self.view_tabs.addTab(map_page, "Wafer")
+        self.wafer_page = map_page
 
         summary_page = QWidget()
+        self.summary_page = summary_page
         summary_layout = QVBoxLayout(summary_page)
         summary_layout.setContentsMargins(0, 0, 0, 0)
         summary_row = QHBoxLayout()
@@ -1042,13 +1245,13 @@ class RunPanel(QWidget):
         shmoo_layout.setContentsMargins(0, 0, 0, 0)
         shmoo_row = QHBoxLayout()
         self.shmoo_vdd = QSpinBox()
-        self.shmoo_vdd.setRange(2, 24)
-        self.shmoo_vdd.setValue(4)
+        self.shmoo_vdd.setRange(2, 64)
+        self.shmoo_vdd.setValue(12)
         self.shmoo_period = QSpinBox()
-        self.shmoo_period.setRange(2, 24)
-        self.shmoo_period.setValue(4)
+        self.shmoo_period.setRange(2, 64)
+        self.shmoo_period.setValue(12)
         self.shmoo_cycles = QSpinBox()
-        self.shmoo_cycles.setRange(1, 10000)
+        self.shmoo_cycles.setRange(1, 100000)
         self.shmoo_cycles.setValue(16)
         shmoo_run = QPushButton("Run shmoo")
         shmoo_run.clicked.connect(self.run_shmoo_once)
@@ -1063,6 +1266,9 @@ class RunPanel(QWidget):
         for widget in (shmoo_run, shmoo_png, shmoo_csv):
             shmoo_row.addWidget(widget)
         shmoo_layout.addLayout(shmoo_row)
+        self.shmoo_info = QLabel("")
+        self.shmoo_info.setWordWrap(True)
+        shmoo_layout.addWidget(self.shmoo_info)
         self.shmoo = ShmooWidget()
         shmoo_layout.addWidget(self.shmoo, 1)
         self.view_tabs.addTab(shmoo_page, "Shmoo")
@@ -1092,7 +1298,9 @@ class RunPanel(QWidget):
     def set_session(self, session: Session | None) -> None:
         """Populate the controls from a loaded session."""
         self.stage_box.clear()
+        self._session = session
         if session is None:
+            self._sync_breakpoint_choices()
             return
         try:
             info = session.info()
@@ -1113,6 +1321,53 @@ class RunPanel(QWidget):
             self.die_size = float(max(wafer.die_size_mm))
         self._rebuild_site_checks(info.sites, set(loaded.run.disabled_sites))
         self.session_path = str(session.path)
+        self._sync_shmoo_controls()
+        self._sync_breakpoint_choices(session)
+
+    def _sync_breakpoint_choices(self, session: Session | None = None) -> None:
+        """List the flow's test items in the breakpoint box for the active stage."""
+        session = session or self._session
+        previous = self.bp_box.currentData()
+        self.bp_box.blockSignals(True)
+        self.bp_box.clear()
+        if session is not None:
+            try:
+                stage = self.stage_box.currentText() or session.stage
+                nodes = list(session.loaded.program.flow(stage))
+            except (ConfigProblem, KeyError, AttributeError):
+                nodes = []
+            for test_num, name in _flow_item_numbers(nodes):
+                self.bp_box.addItem(f"{test_num}  {name}", test_num)
+        self.bp_box.blockSignals(False)
+        if previous is not None:
+            index = self.bp_box.findData(int(previous))
+            if index >= 0:
+                self.bp_box.setCurrentIndex(index)
+
+    def _sync_shmoo_controls(self) -> None:
+        """Seed the shmoo grid from the flow so one click matches a run.
+
+        Without this the spin boxes would silently override the program's
+        ``vdd_steps`` / ``period_steps`` / ``cycles``, and the quick plot would
+        be a coarser (and differently pass-rated) version of the flow's.
+        """
+        path = self.session_path
+        found = _flow_shmoo(path) if path else None
+        if not found:
+            self.shmoo_info.setText("flow has no shmoo item: this grid is used as is")
+            return
+        stage, params = found
+        for widget, key in ((self.shmoo_vdd, "vdd_steps"), (self.shmoo_period, "period_steps"),
+                            (self.shmoo_cycles, "cycles")):
+            value = int(params.get(key, widget.value()) or widget.value())
+            widget.setValue(max(widget.minimum(), min(widget.maximum(), value)))
+        self.shmoo_info.setText(
+            f"{Path(path).parent.name} · {stage} · {self.shmoo_vdd.value()}×"
+            f"{self.shmoo_period.value()} grid · VDD {params.get('vdd_min', '-')}–"
+            f"{params.get('vdd_max', '-')} V · {params.get('period_min_ns', '-')}–"
+            f"{params.get('period_max_ns', '-')} ns · {self.shmoo_cycles.value()} cycles · "
+            "nominal die"
+        )
 
     def _rebuild_site_checks(self, count: int, disabled: set[int]) -> None:
         while self.site_checks:
@@ -1193,6 +1448,14 @@ class RunPanel(QWidget):
         self.uph_label.setText("uph: -")
         self.oee_label.setText("oee: -")
         self._tray_shown = False
+        self._bp_hit = None
+        self.state_label.setText("state: idle")
+        self.start_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.resume_btn.setEnabled(False)
+        self.step_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+        self._show_breakpoints()
         self._summary_keys = []
         self.summary_table.setRowCount(0)
         self.datalog_count.setText("0 rows")
@@ -1226,7 +1489,15 @@ class RunPanel(QWidget):
             self.handle.step()
 
     def _add_breakpoint(self) -> None:
-        test_num = int(self.bp_spin.value())
+        data = self.bp_box.currentData()
+        if data is None:
+            head = self.bp_box.currentText().strip().split()
+            if not head or not head[0].isdigit():
+                self.bp_label.setText("breakpoints: pick a test item first")
+                return
+            test_num = int(head[0])
+        else:
+            test_num = int(data)
         self.breakpoints.add(test_num)
         if self.handle is not None:
             self.handle.set_breakpoint(test_num)
@@ -1234,6 +1505,7 @@ class RunPanel(QWidget):
 
     def _clear_breakpoints(self) -> None:
         self.breakpoints.clear()
+        self._bp_hit = None
         if self.handle is not None:
             self.handle.clear_breakpoint()
         self._show_breakpoints()
@@ -1243,7 +1515,7 @@ class RunPanel(QWidget):
             self.bp_label.setText("breakpoints: none")
             return
         text = ", ".join(str(num) for num in sorted(self.breakpoints))
-        self.bp_label.setText(f"breakpoints: {text}")
+        self.bp_label.setText(f"breakpoints: {text} (one shot)")
 
     def _on_datalog_select(self) -> None:
         row = self.datalog.currentRow()
@@ -1254,7 +1526,11 @@ class RunPanel(QWidget):
             test_num = int(float(item.text()))
         except ValueError:
             return
-        self.bp_spin.setValue(test_num)
+        index = self.bp_box.findData(test_num)
+        if index >= 0:
+            self.bp_box.setCurrentIndex(index)
+        else:
+            self.bp_box.setEditText(str(test_num))
         for index in range(self.summary_table.rowCount()):
             item = self.summary_table.item(index, 0)
             if item is not None and item.data(Qt.UserRole) == test_num:
@@ -1283,6 +1559,17 @@ class RunPanel(QWidget):
             "period_steps": int(self.shmoo_period.value()),
             "cycles": int(self.shmoo_cycles.value()),
         }
+        # a flow that already contains a shmoo item knows the right VDD /
+        # period window (see configs/demo_shmoo); the spin boxes only decide
+        # the grid, and they start out on the flow's own values
+        flow = _flow_shmoo_params(path)
+        params = {**flow, **params}
+        self.shmoo_info.setText(
+            f"{Path(path).parent.name} · {params.get('vdd_min', '-')}–"
+            f"{params.get('vdd_max', '-')} V · {params.get('period_min_ns', '-')}–"
+            f"{params.get('period_max_ns', '-')} ns · {params['vdd_steps']}×"
+            f"{params['period_steps']} grid · {params['cycles']} cycles · nominal die"
+        )
 
         def work() -> None:
             try:
@@ -1292,7 +1579,10 @@ class RunPanel(QWidget):
                 return
             self.shmooReady.emit(data)
 
-        self.log_view.appendPlainText("shmoo started")
+        self.log_view.appendPlainText(
+            f"shmoo started: {params['vdd_steps']}x{params['period_steps']} grid, "
+            f"{params['cycles']} cycles, nominal die (no process variation)"
+        )
         threading.Thread(target=work, name="pyate-shmoo", daemon=True).start()
 
     def _on_shmoo_ready(self, data: object) -> None:
@@ -1390,8 +1680,39 @@ class RunPanel(QWidget):
             self.log_view.appendPlainText(f"wafer map saved to {path}")
 
     # ------------------------------------------------------------------- tick
+    def _sync_run_state(self, snapshot: dict[str, Any]) -> None:
+        """Show running / paused / finished and gate the control buttons."""
+        handle = self.handle
+        running = bool(handle is not None and handle.running)
+        paused = bool(handle is not None and handle.paused)
+        if running:
+            state = "paused" if paused else "running"
+        else:
+            state = "done" if snapshot.get("finished") else "idle"
+        self.state_label.setText(f"state: {state}")
+        self.start_btn.setEnabled(not running)
+        self.pause_btn.setEnabled(running and not paused)
+        self.resume_btn.setEnabled(running and paused)
+        self.step_btn.setEnabled(running and paused)
+        self.stop_btn.setEnabled(running)
+        hit = snapshot.get("paused_at")
+        if not hit or hit == self._bp_hit:
+            return
+        self._bp_hit = dict(hit)
+        test_num = int(hit.get("test_num") or 0)
+        self.breakpoints.discard(test_num)
+        armed = ", ".join(str(num) for num in sorted(self.breakpoints))
+        text = (f"hit {test_num} {hit.get('item') or ''}"
+                f" (site {hit.get('site') or '-'}) - Resume to continue")
+        if armed:
+            text += f" · armed {armed}"
+        self.bp_label.setText(text)
+
     def _tick(self) -> None:
         with self.vm.lock:
+            # run state changes on pausing / breakpoints, not only when the
+            # render throttle lets a full repaint through
+            self._sync_run_state(self.vm.snapshot())
             self._render_tick()
 
     def _render_tick(self) -> None:
@@ -1400,7 +1721,11 @@ class RunPanel(QWidget):
         snapshot = self.vm.snapshot()
         self.unit_label.setText(f"unit: {snapshot['unit'] or '-'}")
         self.parts_label.setText(f"parts: {snapshot['parts']}")
-        self.yield_label.setText(f"yield: {snapshot['yield_pct']:.2f} %")
+        # no tested part yet (a single item run tests no part): a 0.00 % yield
+        # would look like every part failed
+        self.yield_label.setText(
+            f"yield: {snapshot['yield_pct']:.2f} %" if snapshot["parts"] else "yield: -"
+        )
         self.bins_label.setText(f"bins: {len(snapshot['bins'])}")
         self.uph_label.setText(
             f"uph: {snapshot.get('uph', 0):.0f}"
@@ -1446,6 +1771,15 @@ class RunPanel(QWidget):
     def _refresh_rows(self) -> None:
         site = self.site_filter.currentData()
         rows = list(self.vm.rows_for_site(site))
+        blocked = self.datalog.blockSignals(True)
+        self.datalog.setUpdatesEnabled(False)
+        try:
+            self._fill_datalog_rows(rows)
+        finally:
+            self.datalog.blockSignals(blocked)
+            self.datalog.setUpdatesEnabled(True)
+
+    def _fill_datalog_rows(self, rows: list[Any]) -> None:
         colors = bins_colors()
         self.datalog.setSortingEnabled(False)
         self.datalog.setRowCount(len(rows))
@@ -1464,12 +1798,17 @@ class RunPanel(QWidget):
             )
             for col, (text, sort_value) in enumerate(values):
                 item = _put_cell(self.datalog, index, col, str(text), sort_value)
-                if col in numeric:
+                if col in numeric and not getattr(item, "_aligned", False):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    item._aligned = True
                 if col == 8:
-                    item.setForeground(QColor(colors.get(1 if row.passed else 2, "#2e9e5b")))
-                elif not row.passed:
-                    item.setForeground(QColor(colors.get(2, "#c0392b")))
+                    color = colors.get(1 if row.passed else 2, "#2e9e5b")
+                else:
+                    color = colors.get(2, "#c0392b") if not row.passed else None
+                if getattr(item, "_display_color", None) != color:
+                    # Clearing the role restores the palette after fail -> pass.
+                    item.setData(Qt.ForegroundRole, QColor(color) if color else None)
+                    item._display_color = color
         self.datalog.setSortingEnabled(True)
         self.datalog_count.setText(f"{len(rows)} rows")
         if rows and not self.datalog.horizontalHeader().isSortIndicatorShown():
@@ -1488,124 +1827,6 @@ class RunPanel(QWidget):
             text += (f"  (prober {configured[0]}×{configured[1]} "
                      f"trimmed to {touch.get('sites', '')} sites)")
         self.layout_label.setText(text)
-
-
-# ------------------------------------------------------------------ batch panel
-class BatchPanel(QWidget):
-    """Load and run a ``batch.yaml`` and watch the job states."""
-
-    def __init__(self, vm: BatchViewModel, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.vm = vm
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
-        row = QHBoxLayout()
-        self.path_edit = QLineEdit()
-        self.path_edit.setPlaceholderText("path to batch.yaml")
-        browse = QPushButton("Open...")
-        browse.clicked.connect(self._browse)
-        load = QPushButton("Load")
-        load.clicked.connect(self._load)
-        self.start_btn = QPushButton("Run batch")
-        self.start_btn.clicked.connect(self.start)
-        self.cancel_btn = QPushButton("Cancel")
-        self.cancel_btn.clicked.connect(self.cancel)
-        self.open_btn = QPushButton("Open output")
-        self.open_btn.clicked.connect(self.open_output)
-        row.addWidget(self.path_edit)
-        for widget in (browse, load, self.start_btn, self.cancel_btn, self.open_btn):
-            row.addWidget(widget)
-        row.addWidget(QLabel("workers:"))
-        self.workers = QSpinBox()
-        self.workers.setRange(1, 16)
-        self.workers.setValue(2)
-        row.addWidget(self.workers)
-        layout.addLayout(row)
-
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(
-            ["job", "status", "parts", "yield %", "duration s", "error"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.table.setHorizontalHeaderLabels(
-            ["job", "status", "parts", "yield %", "duration s", "error"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.table, 1)
-        self.status = QLabel("no batch loaded")
-        layout.addWidget(self.status)
-
-        self.timer = QTimer(self)
-        self.timer.setInterval(200)
-        self.timer.timeout.connect(self._tick)
-        self.timer.start()
-
-    def _browse(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open batch", "",
-                                              "Batch (*.yaml *.yml)")
-        if path:
-            self.path_edit.setText(path)
-            self._load()
-
-    def _load(self) -> None:
-        rows = self.vm.load(self.path_edit.text().strip())
-        self._fill(rows)
-        self.status.setText(self.vm.error or f"{len(rows)} job(s)")
-
-    def start(self) -> bool:
-        """Start the batch in the background."""
-        if not self.vm.rows:
-            self._load()
-        if not self.vm.start(workers=self.workers.value()):
-            self.status.setText(self.vm.error or "nothing to run")
-            return False
-        self.status.setText("batch running...")
-        return True
-
-    def cancel(self) -> None:
-        """Cancel pending jobs."""
-        self.vm.cancel()
-
-    def _tick(self) -> None:
-        if self.vm.runner is None:
-            return
-        self._fill(self.vm.poll())
-        self.status.setText(self.vm.aggregate_text() if not self.vm.running
-                            else "batch running...")
-
-    def _fill(self, rows: list[Any]) -> None:
-        self.table.setRowCount(len(rows))
-        for index, row in enumerate(rows):
-            values = (row.job_id, row.status, row.parts, round(row.yield_pct, 2),
-                      round(row.duration_s, 1), row.error)
-            for col, value in enumerate(values):
-                item = QTableWidgetItem("-" if value is None else _fmt_num(value))
-                if col in (2, 3, 4):
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                if col == 1:
-                    colour = {"DONE": "#2e9e5b", "FAILED": "#c0392b",
-                              "CANCELLED": "#e67e22"}.get(str(row.status).upper())
-                    if colour:
-                        item.setForeground(QColor(colour))
-                self.table.setItem(index, col, item)
-            self.table.item(index, 0).setData(Qt.UserRole, row.output_dir)
-
-    def open_output(self) -> None:
-        """Open the selected job's output directory in the file manager."""
-        row = self.table.currentRow()
-        path = ""
-        if row >= 0:
-            item = self.table.item(row, 0)
-            path = "" if item is None else str(item.data(Qt.UserRole) or "")
-        if not path or not Path(path).is_dir():
-            self.status.setText("select a job that already has an output directory")
-            return
-        if os.name == "nt":
-            os.startfile(path)
-        else:
-            self.status.setText(path)
 
 
 # ---------------------------------------------------------------- pattern panel

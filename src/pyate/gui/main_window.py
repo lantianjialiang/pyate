@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtGui import QAction
+from PySide6.QtCore import Signal
+from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -16,19 +18,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..api import ConfigProblem, EventBus, Session
+from ..api import ConfigProblem, EventBus, ItemRunReport, Session, run_item
 from .app import application_icon
-from .panels import BatchPanel, ConfigPanel, FlowPanel, LimitsPanel, PatternPanel, RunPanel
+from .panels import ConfigPanel, FlowPanel, LimitsPanel, PatternPanel, RunPanel
+from .plugin_panel import PluginPanel
 from .stdf_panel import StdfPanel
 from .theme import set_theme as set_canvas_theme
 from .theme import stylesheet
-from .viewmodels import BatchViewModel, ConfigViewModel, RunViewModel
+from .viewmodels import ConfigViewModel, RunViewModel
 
 __all__ = ["MainWindow"]
 
 
 class MainWindow(QMainWindow):
     """The pyate GUI shell: one tab per workflow step."""
+
+    itemRunFinished = Signal(object)
 
     def __init__(self, session_path: str | Path | None = None,
                  *, theme: str = "light") -> None:
@@ -41,7 +46,6 @@ class MainWindow(QMainWindow):
         self.events = EventBus()
         self.config_vm = ConfigViewModel()
         self.run_vm = RunViewModel().attach(self.events)
-        self.batch_vm = BatchViewModel(events=self.events)
         self.session_path: str | None = None
 
         self.tabs = QTabWidget()
@@ -49,9 +53,9 @@ class MainWindow(QMainWindow):
         self.flow_panel = FlowPanel(self.config_vm)
         self.limits_panel = LimitsPanel(self.config_vm)
         self.run_panel = RunPanel(self.run_vm)
-        self.batch_panel = BatchPanel(self.batch_vm)
         self.pattern_panel = PatternPanel()
         self.stdf_panel = StdfPanel()
+        self.plugin_panel = PluginPanel()
 
         self.tabs.addTab(self.config_panel, "Config")
         self.tabs.addTab(self.flow_panel, "TestFlow")
@@ -59,7 +63,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.run_panel, "Run")
         self.tabs.addTab(self.pattern_panel, "Pattern")
         self.tabs.addTab(self.stdf_panel, "STDF")
-        self.tabs.addTab(self.batch_panel, "Batch")
+        self.tabs.addTab(self.plugin_panel, "Plugins")
 
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -77,6 +81,10 @@ class MainWindow(QMainWindow):
 
         self.config_panel.sessionOpened.connect(self.on_session_opened)
         self.config_panel.filesSaved.connect(self.on_files_saved)
+        self.flow_panel.runItemRequested.connect(self.run_single_item)
+        self.plugin_panel.pluginsChanged.connect(self.status.setText)
+        self.itemRunFinished.connect(self._on_item_run_finished)
+        self._item_thread: threading.Thread | None = None
         self.config_panel.path_edit.setText(str(session_path) if session_path else "")
         if session_path:
             self.load_session(str(session_path))
@@ -88,9 +96,6 @@ class MainWindow(QMainWindow):
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._open_dialog)
         file_menu.addAction(open_action)
-        open_batch = QAction("Open &batch...", self)
-        open_batch.triggered.connect(self._open_batch)
-        file_menu.addAction(open_batch)
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
@@ -98,15 +103,33 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         view_menu = self.menuBar().addMenu("&View")
-        for name in ("dark", "light"):
-            action = QAction(f"{name} theme", self)
+        self.theme_actions: dict[str, QAction] = {}
+        themes = QActionGroup(self)
+        themes.setExclusive(True)
+        for name in ("light", "dark"):
+            action = QAction(f"{name.capitalize()} theme", self)
+            action.setCheckable(True)
+            action.setChecked(name == self.theme)
             action.triggered.connect(lambda _checked=False, n=name: self.set_theme(n))
+            themes.addAction(action)
             view_menu.addAction(action)
+            self.theme_actions[name] = action
 
         help_menu = self.menuBar().addMenu("&Help")
         about = QAction("&About pyate", self)
         about.triggered.connect(self._about)
         help_menu.addAction(about)
+
+        tools_menu = self.menuBar().addMenu("&Tools")
+        plugins = QAction("&Plugins...", self)
+        plugins.setShortcut("Ctrl+Shift+P")
+        plugins.triggered.connect(self.show_plugins)
+        tools_menu.addAction(plugins)
+
+    def show_plugins(self) -> None:
+        """Switch to the plugin page (refreshed, so it reflects what runs will use)."""
+        self.plugin_panel.refresh()
+        self.tabs.setCurrentWidget(self.plugin_panel)
 
     def _about(self) -> None:
         QMessageBox.about(
@@ -117,9 +140,11 @@ class MainWindow(QMainWindow):
 
     def set_theme(self, theme: str) -> None:
         """Switch between the dark and light style sheets."""
-        self.theme = theme
-        set_canvas_theme(theme)
-        self.setStyleSheet(stylesheet(theme))
+        self.theme = "light" if str(theme).lower() == "light" else "dark"
+        set_canvas_theme(self.theme)
+        self.setStyleSheet(stylesheet(self.theme))
+        for name, action in getattr(self, "theme_actions", {}).items():
+            action.setChecked(name == self.theme)
 
     # ------------------------------------------------------------------ slots
     def _open_dialog(self) -> None:
@@ -128,14 +153,6 @@ class MainWindow(QMainWindow):
         if path:
             self.config_panel.path_edit.setText(path)
             self.load_session(path)
-
-    def _open_batch(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Open batch", "",
-                                              "Batch (*.yaml *.yml)")
-        if path:
-            self.batch_panel.path_edit.setText(path)
-            self.batch_panel._load()
-            self.tabs.setCurrentWidget(self.batch_panel)
 
     def load_session(self, path: str) -> bool:
         """Open a session and populate every panel."""
@@ -155,6 +172,7 @@ class MainWindow(QMainWindow):
             return False
         self.run_panel.session_path = path
         self.run_panel.set_session(session)
+        self.flow_panel.set_sites(info.sites)
         self.flow_panel.refresh()
         self.limits_panel.refresh()
         self.status.setText(f"{info.name}: stage {info.stage}, {info.sites} site(s), "
@@ -173,6 +191,70 @@ class MainWindow(QMainWindow):
         if self.config_vm.session is not None:
             self.run_panel.set_session(self.config_vm.session)
         self.status.setText(f"saved {path}")
+
+    # ------------------------------------------------------------ single item
+    def run_single_item(self, request: dict[str, Any]) -> None:
+        """Run one flow item off the wafer and show it on the Run page."""
+        if self.session_path is None:
+            self.status.setText("open a session first")
+            self.flow_panel.set_item_status("open a session first")
+            return
+        if self.run_vm.running:
+            self.flow_panel.set_item_status("stop the run first")
+            QMessageBox.information(self, "single item", "stop the run before running a single item")
+            return
+        if request.get("clear"):
+            self.run_panel.clear_results()
+        bus = self._item_bus()
+        self.tabs.setCurrentWidget(self.run_panel)
+        self.status.setText(f"running {request.get('name')} #{request.get('test_num')} ...")
+        self._item_thread = threading.Thread(
+            target=self._item_worker, args=(dict(request), bus), name="pyate-item", daemon=True
+        )
+        self._item_thread.start()
+
+    def _item_bus(self) -> EventBus:
+        """Event bus the Run page listens on (a finished run replaces it)."""
+        if self.run_vm.events is not self.events:
+            self.run_vm.detach()
+            self.run_vm.attach(self.events)
+        return self.events
+
+    def _item_worker(self, request: dict[str, Any], bus: EventBus) -> None:
+        try:
+            report = self._run_single_item_now(request, events=bus)
+        except Exception as exc:  # surfaced on the main thread
+            self.itemRunFinished.emit({"error": str(exc)})
+            return
+        self.itemRunFinished.emit(report)
+
+    def _run_single_item_now(self, request: dict[str, Any], *,
+                             events: EventBus | None = None) -> ItemRunReport:
+        """Synchronous core of :meth:`run_single_item` (also used by tests)."""
+        if self.session_path is None:
+            raise RuntimeError("no session loaded")
+        site = int(request.get("site") or 0)
+        return run_item(
+            Session(self.session_path),
+            name=str(request.get("name") or ""),
+            test_num=int(request.get("test_num") or 0),
+            stage=request.get("stage") or None,
+            sites=[site] if site else None,
+            params=request.get("params"),
+            events=events or self._item_bus(),
+        )
+
+    def _on_item_run_finished(self, report: Any) -> None:
+        if isinstance(report, dict) and report.get("error"):
+            text = f"item run failed: {report['error']}"
+            self.status.setText(text)
+            self.flow_panel.set_item_status(text)
+            self.run_panel.log_view.appendPlainText(text)
+            return
+        text = report.text()
+        self.status.setText(text)
+        self.flow_panel.set_item_status(text)
+        self.run_panel.log_view.appendPlainText(f"item run: {text}")
 
     # ------------------------------------------------------------------ misc
     def run_smoke(self, *, sites: int | None = None, stage: str | None = None) -> Any:

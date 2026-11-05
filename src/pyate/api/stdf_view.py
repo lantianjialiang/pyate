@@ -10,10 +10,12 @@ from ..datalog.stdf.reader_check import read_stdf
 
 __all__ = ["inspect_stdf"]
 
-_FAIL = 0x02
-_NOT_EXECUTED = 0x08
-_PART_NOT_TESTED = 0x01
-_PART_FAIL = 0x02
+#: Bit masks used by :mod:`pyate.datalog.stdf.writer` (see docs/STDF_MAPPING.md).
+_FAIL = 0x80            # TEST_FLG: test failed
+_NOT_EXECUTED = 0x10    # TEST_FLG: test was not executed
+_PART_NOT_TESTED = 0x10  # PART_FLG: no pass/fail indication
+_PART_FAIL = 0x08        # PART_FLG: part failed
+_PART_RETEST = 0x01      # PART_FLG: superseded / retested
 
 
 def _open_limit(value: Any) -> float | None:
@@ -137,7 +139,7 @@ def _assemble(path: Path, records: list[tuple[str, dict[str, Any]]]) -> dict[str
             bucket = wafer_parts.setdefault(wafer, {"parts": 0, "good": 0})
             bucket["parts"] += 1
             stats["parts"] += 1
-            if flags & 0x04:
+            if flags & _PART_RETEST:
                 stats["retests"] += 1
             passed = not (flags & (_PART_NOT_TESTED | _PART_FAIL))
             if passed:

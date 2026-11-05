@@ -22,6 +22,8 @@ __all__ = [
     "list_models",
     "mix_seed",
     "register_dut",
+    "registered_dut",
+    "unregister_dut",
 ]
 
 _REGISTRY: dict[str, type[DUTModel]] = {}
@@ -65,6 +67,16 @@ def is_registered(name: str) -> bool:
     return name in _REGISTRY
 
 
+def registered_dut(name: str) -> type[DUTModel] | None:
+    """The model class currently registered under ``name`` (``None`` when absent)."""
+    return _REGISTRY.get(name)
+
+
+def unregister_dut(name: str) -> type[DUTModel] | None:
+    """Drop a model registration (used when a plugin is disabled)."""
+    return _REGISTRY.pop(name, None)
+
+
 def list_models() -> list[str]:
     """Every registered DUT model name."""
     _ensure_builtins()
@@ -97,12 +109,18 @@ def create_dut(
     sampler: YieldSampler | None = None,
     sample_yield: bool = True,
     instance: DUTInstanceSpec | None = None,
+    variation: bool = True,
 ) -> DUTModel:
     """Instantiate a DUT from a ``DutProfile`` (or a compatible duck type).
 
     ``profile`` must expose ``model``, ``params``, ``defects``, ``yield_`` and
     ``process``.  ``x``/``y`` are die coordinates in millimetres, used by the
     spatial yield model.
+
+    ``variation=False`` skips the die-to-die process draw, so the part behaves
+    exactly like ``dut_profile.params`` describes. Characterization helpers
+    (shmoo, single item debug) want that: the plot must not depend on which
+    seed happens to be configured.
     """
     if instance is not None:
         if instance.profile_json:
@@ -119,10 +137,12 @@ def create_dut(
     dut = cls(dict(profile.params), rng)
 
     process = profile.process
-    idd_scale = float(rng.lognormvariate(0.0, max(1e-6, process.idd_sigma)))
-    leak_scale = float(rng.lognormvariate(0.0, max(1e-6, process.leak_sigma)))
-    vth_shift = float(rng.gauss(0.0, process.vth_sigma))
-    dut.apply_process_variation(vth_shift=vth_shift, idd_scale=idd_scale, leak_scale=leak_scale)
+    if variation:
+        idd_scale = float(rng.lognormvariate(0.0, max(1e-6, process.idd_sigma)))
+        leak_scale = float(rng.lognormvariate(0.0, max(1e-6, process.leak_sigma)))
+        vth_shift = float(rng.gauss(0.0, process.vth_sigma))
+        dut.apply_process_variation(vth_shift=vth_shift, idd_scale=idd_scale,
+                                    leak_scale=leak_scale)
 
     defects = [_defect_from_spec(spec) for spec in profile.defects]
     if sample_yield:

@@ -52,7 +52,7 @@ def test_cp_stdf_records_match_field_by_field(tmp_path) -> None:
     left = _normalised(first)
     right = _normalised(second)
     assert len(left) == len(right)
-    for index, ((ln, lv), (rn, rv)) in enumerate(zip(left, right)):
+    for index, ((ln, lv), (rn, rv)) in enumerate(zip(left, right, strict=True)):
         assert ln == rn, f"record {index} type differs"
         assert lv == rv, f"record {index} ({ln}) differs"
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Literal
 
 from ..engine.context import SiteContext, TestResult
@@ -49,10 +50,8 @@ class FunctionalItem(TestItem):
         digital = resources.digital
         level_config = getattr(hal, "level_config", None)
         if pattern.levels and level_config is not None:
-            try:
+            with contextlib.suppress(KeyError):
                 digital.apply_levels(level_config.get(pattern.levels))
-            except KeyError:
-                pass
         digital.load_pattern(pattern)
         run = digital.run(
             start_label=self.params.start_label,

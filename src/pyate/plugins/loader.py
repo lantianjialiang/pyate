@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
 import logging
@@ -60,6 +61,22 @@ class PluginRegistry:
     config_sections: dict[str, Any] = field(default_factory=dict)
     binning_strategies: dict[str, Any] = field(default_factory=dict)
     messages: list[str] = field(default_factory=list)
+    #: ``"<kind>:<name>"`` → plugin that registered it (used to disable a plugin).
+    owners: dict[str, str] = field(default_factory=dict)
+    #: ``"<kind>:<name>"`` → value before the first plugin replaced it.
+    previous: dict[str, Any] = field(default_factory=dict)
+    #: ``plugin name`` → messages it noted (removed together with the plugin).
+    plugin_messages: dict[str, list[str]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self._current = ""
+
+    def _claim(self, key: str, previous: Any, owner: str | None = None) -> None:
+        """Remember which plugin owns ``key`` (and what it replaced)."""
+        self.previous.setdefault(key, previous)
+        owner = owner if owner is not None else self._current
+        if owner:
+            self.owners[key] = owner
 
     # ------------------------------------------------------------- register
     def register_dut(self, name: str | None = None) -> Callable[[type], type]:
@@ -76,41 +93,96 @@ class PluginRegistry:
 
     def add_dut(self, name: str, cls: type) -> None:
         """Register a DUT model under ``name``."""
-        from ..dut.registry import register_dut
+        from ..dut.registry import register_dut, registered_dut
 
+        key = f"dut:{name}"
+        self._claim(key, registered_dut(name))
         register_dut(name)(cls)
         self.dut_models[name] = cls
 
     def add_testitem(self, name: str, cls: type) -> None:
         """Register a test item under ``name``."""
-        from ..testitems.registry import register_testitem
+        from ..testitems.registry import register_testitem, registered_testitem
 
+        key = f"testitem:{name}"
+        self._claim(key, registered_testitem(name))
         register_testitem(name)(cls)
         self.testitems[name] = cls
 
     def add_sink(self, name: str, factory: Callable[..., Any]) -> None:
         """Register a datalog sink factory (``factory(**kwargs)``)."""
+        self._claim(f"sink:{name}", self.sinks.get(name))
         self.sinks[name] = factory
 
     def add_instrument(self, name: str, impl: Any) -> None:
         """Register a new instrument category."""
+        self._claim(f"instrument:{name}", self.instruments.get(name))
         self.instruments[name] = impl
 
     def add_scenario(self, name: str, impl: Any) -> None:
         """Register a scenario implementation."""
+        self._claim(f"scenario:{name}", self.scenarios.get(name))
         self.scenarios[name] = impl
 
     def add_config_section(self, name: str, model: Any) -> None:
         """Register an extra configuration section (pydantic model)."""
+        self._claim(f"config_section:{name}", self.config_sections.get(name))
         self.config_sections[name] = model
 
     def add_binning_strategy(self, name: str, impl: Any) -> None:
         """Register a custom binning strategy."""
+        self._claim(f"binning:{name}", self.binning_strategies.get(name))
         self.binning_strategies[name] = impl
 
     def note(self, message: str) -> None:
         """Record an informational message shown by ``pyate plugin list``."""
+        if message in self.messages:
+            return
         self.messages.append(message)
+        if self._current:
+            self.plugin_messages.setdefault(self._current, []).append(message)
+
+    def contributions(self, plugin: str) -> list[str]:
+        """``kind:name`` entries a plugin added to this registry."""
+        return sorted(key for key, owner in self.owners.items() if owner == plugin)
+
+    def remove_plugin(self, plugin: str) -> list[str]:
+        """Undo everything ``plugin`` registered; returns the removed keys."""
+        from ..dut.registry import register_dut, unregister_dut
+        from ..testitems.registry import register_testitem, unregister_testitem
+
+        removed: list[str] = []
+        buckets: dict[str, dict[str, Any]] = {
+            "dut": self.dut_models,
+            "testitem": self.testitems,
+            "sink": self.sinks,
+            "instrument": self.instruments,
+            "scenario": self.scenarios,
+            "config_section": self.config_sections,
+            "binning": self.binning_strategies,
+        }
+        for key, owner in list(self.owners.items()):
+            if owner != plugin:
+                continue
+            kind, _, name = key.partition(":")
+            previous = self.previous.pop(key, None)
+            buckets.get(kind, {}).pop(name, None)
+            if kind == "dut":
+                unregister_dut(name)
+                if previous is not None:
+                    register_dut(name)(previous)
+            elif kind == "testitem":
+                unregister_testitem(name)
+                if previous is not None:
+                    register_testitem(name)(previous)
+            elif previous is not None:
+                buckets[kind][name] = previous
+            del self.owners[key]
+            removed.append(key)
+        for message in self.plugin_messages.pop(plugin, []):
+            if message in self.messages:
+                self.messages.remove(message)
+        return removed
 
     def summary(self) -> dict[str, list[str]]:
         """Names registered through the registry."""
@@ -176,6 +248,14 @@ class PluginManager:
         self.rejected: list[str] = []
         self.bridge = HookBridge(self)
         self._lock = threading.RLock()
+        #: plugin name → where it came from (file, package or "entry point")
+        self.sources: dict[str, str] = {}
+        #: plugin name → registered object (module or ``Plugin`` instance)
+        self._objects: dict[str, Any] = {}
+        #: plugins removed with :meth:`unload`, kept so they can be enabled again
+        self._inactive: dict[str, Any] = {}
+        #: plugin name → first line of its docstring
+        self.docs: dict[str, str] = {}
 
     # ------------------------------------------------------------------ load
     def load_entrypoints(self) -> list[str]:
@@ -187,7 +267,9 @@ class PluginManager:
             self.errors.append(f"entry point scan failed: {exc}")
             return names
         for plugin in self.pm.get_plugins():
-            names.append(self._name_of(plugin))
+            name = self._name_of(plugin)
+            names.append(name)
+            self.sources.setdefault(name, "entry point")
         self.loaded.extend(n for n in names if n not in self.loaded)
         return names
 
@@ -217,9 +299,35 @@ class PluginManager:
             return False
         self._warn_missing_markers(name, target)
         self._names[id(target)] = name
+        self._objects[name] = target
+        self.docs[name] = _first_line(module) or _first_line(target)
+        source = getattr(module, "__file__", "")
+        if source:
+            self.sources.setdefault(name, str(Path(source).parent if Path(source).name == "__init__.py" else source))
         if name not in self.loaded:
             self.loaded.append(name)
+        self._claim_imports(name, module)
         return True
+
+    def _claim_imports(self, name: str, module: ModuleType) -> None:
+        """Own classes that registered themselves at import time via decorators.
+
+        ``@register_testitem`` / ``@register_dut`` run while the module is
+        imported, before ``pyate_register``. Without this they would survive a
+        :meth:`unload` and look like a plugin that refuses to be disabled.
+        """
+        from ..dut.registry import get_dut_class, list_models
+        from ..testitems.registry import get_testitem_class, list_testitems
+
+        prefix = getattr(module, "__name__", "")
+        if not prefix:
+            return
+        pairs: list[tuple[str, type[Any]]] = [(f"dut:{item}", get_dut_class(item)) for item in list_models()]
+        pairs += [(f"testitem:{item}", get_testitem_class(item)) for item in list_testitems()]
+        for key, cls in pairs:
+            module_name = getattr(cls, "__module__", "")
+            if module_name == prefix or module_name.startswith(f"{prefix}."):
+                self.registry._claim(key, None, owner=name)
 
     def _warn_missing_markers(self, name: str, target: Any) -> None:
         """Flag hook-shaped methods that lack ``@hookimpl`` (pluggy ignores them)."""
@@ -269,7 +377,12 @@ class PluginManager:
         return module
 
     def load_dir(self, directory: str | Path) -> list[str]:
-        """Load every ``*.py`` file and package inside ``directory``."""
+        """Load every module/package inside ``directory``.
+
+        A sub-directory without ``__init__.py`` but with ``pyproject.toml`` is
+        treated as a plugin project (``pyproject.toml`` + ``<name>/__init__.py``),
+        which is how packages generated by ``pyate plugin new`` are laid out.
+        """
         root = Path(directory)
         if not root.is_dir():
             return []
@@ -280,8 +393,14 @@ class PluginManager:
             if entry.is_file() and entry.suffix == ".py":
                 if self.load_file(entry):
                     found.append(entry.stem)
-            elif entry.is_dir() and (entry / "__init__.py").is_file() and self.load_file(entry):
-                found.append(entry.name)
+            elif entry.is_dir() and (entry / "__init__.py").is_file():
+                if self.load_file(entry):
+                    found.append(entry.name)
+            elif entry.is_dir() and (entry / "pyproject.toml").is_file():
+                for child in sorted(entry.iterdir()):
+                    if (child.is_dir() and not child.name.startswith(("_", ".", "test"))
+                            and (child / "__init__.py").is_file() and self.load_file(child)):
+                        found.append(child.name)
         return found
 
     def load_all(self, directories: Sequence[str | Path] | None = None) -> PluginManager:
@@ -294,17 +413,87 @@ class PluginManager:
             for chunk in env.split(os.pathsep):
                 if chunk.strip():
                     self.load_dir(chunk)
+            self.finalize()
+        return self
+
+    def finalize(self) -> PluginManager:
+        """Check API versions and run ``pyate_register`` for everything loaded."""
+        with self._lock:
             self._check_versions()
             self._register()
         return self
 
+    # --------------------------------------------------------------- manage
+    def unload(self, name: str) -> bool:
+        """Disable a plugin: unregister its hooks and undo its registrations."""
+        with self._lock:
+            target = self._objects.pop(name, None)
+            if target is None:
+                return False
+            with contextlib.suppress(ValueError):
+                self.pm.unregister(target)
+            self._inactive[name] = target
+            if name in self.loaded:
+                self.loaded.remove(name)
+            self.registry.remove_plugin(name)
+            return True
+
+    def enable(self, name: str) -> bool:
+        """Re-enable a plugin removed with :meth:`unload`."""
+        with self._lock:
+            target = self._inactive.pop(name, None)
+            if target is None:
+                return name in self._objects
+            try:
+                self.pm.register(target, name=name)
+            except Exception as exc:
+                self.errors.append(f"{name}: register failed: {type(exc).__name__}: {exc}")
+                self._inactive[name] = target
+                return False
+            self._names[id(target)] = name
+            self._objects[name] = target
+            if name not in self.loaded:
+                self.loaded.append(name)
+            self._register_one(target)
+            return True
+
+    def is_enabled(self, name: str) -> bool:
+        """True when ``name`` is currently registered with pluggy."""
+        return name in self._objects
+
+    def describe(self) -> list[dict[str, Any]]:
+        """One entry per known plugin (enabled or not), newest fields first."""
+        entries: list[dict[str, Any]] = []
+        for name in list(self._objects) + [n for n in self._inactive if n not in self._objects]:
+            entries.append({
+                "name": name,
+                "enabled": name in self._objects,
+                "source": self.sources.get(name, ""),
+                "doc": self.docs.get(name, ""),
+                "api_version": self._plugin_version(name),
+                "contributions": self.registry.contributions(name),
+                "messages": list(self.registry.plugin_messages.get(name, [])),
+            })
+        return entries
+
+    def _plugin_version(self, name: str) -> str:
+        """API version reported by one plugin (empty when it does not say)."""
+        target = self._objects.get(name) or self._inactive.get(name)
+        method = getattr(target, "pyate_api_version", None)
+        if method is None:
+            return ""
+        try:
+            return str(method() or "")
+        except Exception:  # pragma: no cover - defensive
+            return ""
+
     def _check_versions(self) -> None:
         for plugin in list(self.pm.get_plugins()):
             name = self._name_of(plugin)
-            version = None
+            others = [p for p in self.pm.get_plugins() if p is not plugin]
             try:
-                hooks = self.pm.hook.pyate_api_version
-                results = [v for v in hooks() if v]
+                caller = self.pm.subset_hook_caller("pyate_api_version", remove_plugins=others)
+                results = [v for v in caller() if v]
                 version = results[0] if results else None
             except Exception as exc:
                 self.errors.append(f"{name}: api_version hook failed: {exc}")
@@ -312,14 +501,27 @@ class PluginManager:
             if version is not None and not _compatible(str(version), self.api_version):
                 self.rejected.append(f"{name} (api {version} != {self.api_version})")
                 self.pm.unregister(plugin)
+                self._objects.pop(name, None)
+                self._inactive.pop(name, None)
                 if name in self.loaded:
                     self.loaded.remove(name)
 
     def _register(self) -> None:
+        for plugin in list(self.pm.get_plugins()):
+            self._register_one(plugin)
+
+    def _register_one(self, plugin: Any) -> None:
+        """Run ``pyate_register`` for one plugin so its contributions are attributable."""
+        name = self._name_of(plugin)
+        others = [p for p in self.pm.get_plugins() if p is not plugin]
+        self.registry._current = name
         try:
-            self.pm.hook.pyate_register(registry=self.registry)
+            caller = self.pm.subset_hook_caller("pyate_register", remove_plugins=others)
+            caller(registry=self.registry)
         except Exception as exc:
             self.errors.append(f"pyate_register failed: {type(exc).__name__}: {exc}")
+        finally:
+            self.registry._current = ""
 
     def _name_of(self, plugin: Any) -> str:
         """Display name of a registered plugin (module or ``Plugin`` instance)."""
@@ -360,7 +562,23 @@ class PluginManager:
             "errors": list(self.errors),
             "warnings": list(self.warnings),
             "registry": self.registry.summary(),
+            "messages": list(self.registry.messages),
+            "plugins": self.describe(),
+            "sources": dict(self.sources),
         }
+
+
+def _first_line(target: Any) -> str:
+    """First non-empty line of a plugin's docstring (module or ``Plugin`` class)."""
+    import inspect
+
+    doc = inspect.getdoc(target) or ""
+    if not doc and not inspect.ismodule(target):
+        doc = inspect.getdoc(type(target)) or ""
+    for line in doc.splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
 
 
 def _compatible(plugin_version: str, kernel_version: str) -> bool:

@@ -55,7 +55,9 @@ def finished_window(qapp: QApplication, tmp_path_factory: pytest.TempPathFactory
 # --------------------------------------------------------------------- shell
 def test_window_builds_every_tab(window: MainWindow) -> None:
     titles = [window.tabs.tabText(index) for index in range(window.tabs.count())]
-    assert titles == ["Config", "TestFlow", "Limits/Bins", "Run", "Pattern", "STDF", "Batch"]
+    assert titles == ["Config", "TestFlow", "Limits/Bins", "Run", "Pattern", "STDF",
+                      "Plugins"]
+    assert "Batch" not in titles
     assert window.theme == "light"
     assert "lantianjialiang" in window.copyright.text()
 
@@ -166,6 +168,24 @@ def test_number_formatting_keeps_cells_legible() -> None:
     assert _fmt_num(2.5e-07) == "2.500e-07"        # tiny values keep precision
     assert _fmt_num(float("nan")).lower() == "nan"
     assert _fmt_num(True) == "yes"
+
+
+def test_datalog_reuses_cells_and_clears_failure_color(window: MainWindow) -> None:
+    from PySide6.QtCore import Qt
+
+    panel = window.run_panel
+    panel.vm.add_measurement(test_num=1, name="IDD", site=1, value=1, passed=False)
+    panel._refresh_rows()
+    cell = panel.datalog.item(0, 4)
+    assert cell.data(Qt.ForegroundRole) is not None
+    panel.vm.reset()
+    panel.vm.add_measurement(test_num=1, name="IDD", site=1, value=2, passed=True)
+    panel._refresh_rows()
+    assert panel.datalog.item(0, 4) is cell
+    assert cell.text() == "2"
+    assert cell.data(Qt.ForegroundRole) is None
+    assert panel.datalog.updatesEnabled()
+    assert not panel.datalog.signalsBlocked()
 
 
 def test_flow_panel_lists_the_stage_items(window: MainWindow) -> None:
@@ -293,15 +313,148 @@ def test_empty_wafer_map_still_renders(qapp: QApplication, tmp_path) -> None:
     assert target.read_bytes().startswith(b"\x89PNG")
 
 
-# ----------------------------------------------------------------------- batch
-def test_batch_panel_loads_jobs(window: MainWindow) -> None:
-    batch = CONFIGS / "demo_batch" / "batch.yaml"
-    assert batch.exists()
-    panel = window.batch_panel
-    panel.path_edit.setText(str(batch))
-    panel._load()
-    assert panel.table.rowCount() >= 2
-    assert "job" in panel.status.text()
+# ---------------------------------------------------------------- flow edits
+def _copy_cp(tmp_path):
+    import shutil
+
+    copy = tmp_path / "demo_cp"
+    shutil.copytree(CONFIGS / "demo_cp", copy)
+    return copy
+
+
+def _flow_button(flow, text: str):
+    from PySide6.QtWidgets import QPushButton
+
+    return next(button for button in flow.findChildren(QPushButton) if button.text() == text)
+
+
+def test_flow_move_keeps_the_node_selected(qapp, tmp_path) -> None:
+    """Repeated Move up/down clicks must not need a new click on the tree."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = MainWindow(str(_copy_cp(tmp_path) / "session.yaml"))
+    try:
+        win.show()
+        win.tabs.setCurrentWidget(win.flow_panel)
+        QApplication.processEvents()
+        flow = win.flow_panel
+        flow.stage_box.setCurrentText("CP1")
+        flow._select_path([1])
+        label = flow.tree.currentItem().text(0)
+        down = _flow_button(flow, "Move down")
+        QTest.mouseClick(down, Qt.LeftButton)
+        QApplication.processEvents()
+        current = flow.tree.currentItem()
+        assert current is not None
+        assert current.text(0) == label
+        assert list(current.data(0, Qt.UserRole)) == [2]
+        # a second click acts on the node the first click moved
+        QTest.mouseClick(down, Qt.LeftButton)
+        QApplication.processEvents()
+        current = flow.tree.currentItem()
+        assert current is not None and current.text(0) == label
+        assert list(current.data(0, Qt.UserRole)) == [3]
+        assert len(flow.tree.selectedItems()) == 1
+        assert flow.tree.hasFocus()
+    finally:
+        win.close()
+        set_theme("dark")
+
+
+def test_flow_move_at_the_edge_keeps_the_node_selected(qapp, tmp_path) -> None:
+    """A refused move (already first) keeps the selection too."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    win = MainWindow(str(_copy_cp(tmp_path) / "session.yaml"))
+    try:
+        win.show()
+        win.tabs.setCurrentWidget(win.flow_panel)
+        QApplication.processEvents()
+        flow = win.flow_panel
+        flow.stage_box.setCurrentText("CP1")
+        flow._select_path([0])
+        label = flow.tree.currentItem().text(0)
+        QTest.mouseClick(_flow_button(flow, "Move up"), Qt.LeftButton)
+        QApplication.processEvents()
+        current = flow.tree.currentItem()
+        assert current is not None and current.text(0) == label
+        assert list(current.data(0, Qt.UserRole)) == [0]
+    finally:
+        win.close()
+        set_theme("dark")
+
+
+def test_flow_run_one_item_fills_the_run_page(qapp, tmp_path) -> None:
+    """Run selected item feeds the Run page datalog, without a part record."""
+    win = MainWindow(str(_copy_cp(tmp_path) / "session.yaml"))
+    try:
+        flow = win.flow_panel
+        flow.stage_box.setCurrentText("CP1")
+        labels = [flow.tree.topLevelItem(i).text(0) for i in range(flow.tree.topLevelItemCount())]
+        index = labels.index("idd_static")
+        flow._select_path([index])
+        assert flow.item_site.count() >= 2  # demo_cp has 4 sites
+        flow.item_site.setCurrentIndex(1)   # site 1
+        report = win._run_single_item_now({
+            "name": "idd_static", "test_num": 2000, "stage": "CP1", "site": 1,
+        })
+        assert report.passed
+        assert len(report.values) == 1
+        rows = win.run_vm.rows
+        assert [row.test_num for row in rows] == [2000]
+        assert rows[0].site == 1
+        assert rows[0].value is not None
+        # a partial flow has no bin: the wafer map and the part counter stay empty
+        assert win.run_vm.parts == 0
+        assert win.run_vm.dies == {}
+    finally:
+        win.close()
+        set_theme("dark")
+
+
+def test_flow_run_one_item_uses_the_form_parameters(qapp, tmp_path) -> None:
+    """Values typed in the parameter form win over the saved program."""
+    from PySide6.QtWidgets import QLineEdit
+
+    win = MainWindow(str(_copy_cp(tmp_path) / "session.yaml"))
+    try:
+        flow = win.flow_panel
+        flow.stage_box.setCurrentText("CP1")
+        labels = [flow.tree.topLevelItem(i).text(0) for i in range(flow.tree.topLevelItemCount())]
+        flow._select_path([labels.index("fmax_search")])
+        editor = flow._param_widgets.get("cycles")
+        assert isinstance(editor, QLineEdit)
+        editor.setText("7")
+        sent: list[dict] = []
+        flow.runItemRequested.connect(sent.append)
+        flow.run_selected_item()
+        assert sent and sent[0]["params"]["cycles"] == 7
+        assert sent[0]["test_num"] == 4000
+        assert sent[0]["site"] == 1
+        assert flow.item_button.isEnabled() is False  # disabled while running
+    finally:
+        win.close()
+        set_theme("dark")
+
+
+def test_flow_run_one_item_refuses_a_group(qapp, tmp_path) -> None:
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QTreeWidgetItem
+
+    win = MainWindow(str(_copy_cp(tmp_path) / "session.yaml"))
+    try:
+        flow = win.flow_panel
+        flow.tree.clear()
+        node = QTreeWidgetItem(flow.tree, ["group", "", "group"])
+        node.setData(0, Qt.UserRole + 1, {"kind": "group", "label": "group"})
+        flow.tree.setCurrentItem(node)
+        flow.run_selected_item()
+        assert "only a test item" in flow.item_status.text()
+    finally:
+        win.close()
+        set_theme("dark")
 
 
 def test_pattern_panel_runs_a_pattern(window: MainWindow) -> None:
@@ -329,6 +482,73 @@ def test_pattern_panel_loads_models(window: MainWindow) -> None:
     assert panel.dut_box.count() > 0
     assert "composite" in [panel.dut_box.itemText(i) for i in range(panel.dut_box.count())]
     assert panel.cycles.value() > 0
+
+
+def test_run_page_breakpoint_box_lists_the_flow(window: MainWindow) -> None:
+    panel = window.run_panel
+    choices = [panel.bp_box.itemText(i) for i in range(panel.bp_box.count())]
+    assert any("idd_static" in text for text in choices)
+    assert panel.state_label.text() == "state: idle"
+    panel.bp_box.setCurrentIndex(0)
+    panel._add_breakpoint()
+    armed = int(panel.bp_box.currentData())
+    assert panel.breakpoints == {armed}
+    assert str(armed) in panel.bp_label.text()
+    panel._clear_breakpoints()
+    assert panel.breakpoints == set()
+    assert panel.bp_label.text() == "breakpoints: none"
+
+
+def test_run_panel_shows_the_breakpoint_hit(qapp: QApplication) -> None:
+    from types import SimpleNamespace
+
+    from pyate.gui.panels import RunPanel
+    from pyate.gui.viewmodels.run_vm import RunViewModel
+
+    panel = RunPanel(RunViewModel())
+    panel.handle = SimpleNamespace(running=True, paused=True)
+    panel._sync_run_state({"finished": False, "paused_at": {
+        "test_num": 2000, "item": "idd_static", "site": 1,
+    }})
+    assert panel.state_label.text() == "state: paused"
+    assert "hit 2000 idd_static" in panel.bp_label.text()
+    assert panel.resume_btn.isEnabled() and panel.step_btn.isEnabled()
+    assert not panel.start_btn.isEnabled() and not panel.pause_btn.isEnabled()
+    panel.close()
+
+
+def test_theme_menu_tracks_the_light_default(window: MainWindow) -> None:
+    assert window.theme_actions["light"].isChecked()
+    assert not window.theme_actions["dark"].isChecked()
+    window.set_theme("dark")
+    assert window.theme_actions["dark"].isChecked()
+    assert not window.theme_actions["light"].isChecked()
+    window.set_theme("light")
+    assert window.theme_actions["light"].isChecked()
+
+
+def test_menu_items_reserve_room_for_shortcuts() -> None:
+    # regression: "Open session..." used to run into "Ctrl+O"
+    for theme in ("light", "dark"):
+        css = stylesheet(theme)
+        assert "QMenu::item { padding:" in css
+
+
+def test_stdf_panel_shows_compact_stats(qapp: QApplication, finished_window) -> None:
+    from pyate.gui.stdf_panel import StdfPanel
+
+    win, _handle = finished_window
+    files = sorted(win.gui_out_dir.glob("*.stdf"))
+    assert files, "the finished run wrote no STDF"
+    panel = StdfPanel()
+    panel.load_file(str(files[0]))
+    assert panel.tiles["parts"].value.text() != "-"
+    assert panel.tiles["yield"].value.text().endswith("%")
+    assert panel.meta_label.text().startswith("lot ")
+    assert panel._chips, "bins should render as chips"
+    assert panel.records_label.text().startswith("records:")
+    assert panel.table.rowCount() > 0
+    panel.close()
 
 
 def test_run_page_has_a_summary_grouped_by_site(window: MainWindow) -> None:
@@ -384,6 +604,39 @@ def test_shmoo_plot_exports_csv(window: MainWindow, tmp_path) -> None:
     text = target.read_text(encoding="utf-8")
     assert "VDD" in text.splitlines()[0]
     assert len(text.splitlines()) == 3
+
+
+def test_shmoo_button_uses_the_window_of_the_flow(qapp) -> None:
+    """Run shmoo seeds range *and* grid from the flow's shmoo item."""
+    import time
+
+    win = MainWindow(str(CONFIGS / "demo_shmoo" / "session.yaml"))
+    try:
+        panel = win.run_panel
+        # the controls start on the program's own grid, so one click reproduces
+        # what a full run would plot instead of a coarser 12x12 version
+        assert (panel.shmoo_vdd.value(), panel.shmoo_period.value(),
+                panel.shmoo_cycles.value()) == (21, 31, 32)
+        assert "demo_shmoo" in panel.shmoo_info.text()
+        panel.shmoo_vdd.setValue(4)
+        panel.shmoo_period.setValue(4)
+        seen: list[dict] = []
+        panel.shmooReady.connect(seen.append)
+        panel.run_shmoo_once()
+        deadline = time.time() + 120
+        while not seen and time.time() < deadline:
+            QApplication.processEvents()
+            time.sleep(0.02)
+        assert seen, "shmoo did not finish"
+        payload = seen[0]
+        assert payload["y"][0] == pytest.approx(2.6)
+        assert payload["x"][0] == pytest.approx(8.0)
+        assert payload["x"][-1] == pytest.approx(128.0)
+        assert len(payload["x"]) == 4
+        assert panel.shmoo.has_data
+    finally:
+        win.close()
+        set_theme("dark")
 
 
 def test_limit_edit_can_be_saved(qapp, tmp_path) -> None:

@@ -77,10 +77,8 @@ def should_retest(part: PartResult, config: RetestConfig, attempt: int) -> bool:
         return False
     if part.extra.get("retest_exhausted"):
         return False
-    if config.on and "fail" not in config.on:
-        if "contact_fail" not in config.on or not any(r.extra.get("contact_fail") for r in part.results):
-            return False
-    return True
+    return not (config.on and "fail" not in config.on
+                and ("contact_fail" not in config.on or not any(r.extra.get("contact_fail") for r in part.results)))
 
 
 def merge_attempt(previous: PartResult, candidate: PartResult, keep: str = "last") -> PartResult:

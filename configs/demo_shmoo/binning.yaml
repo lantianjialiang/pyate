@@ -1,0 +1,85 @@
+pass_bin: 1
+default_fail_bin: 9
+soft_bins:
+- sbin: 1
+  name: PASS
+  pass_fail: P
+- sbin: 2
+  name: CONTINUITY
+  pass_fail: F
+- sbin: 3
+  name: LEAKAGE
+  pass_fail: F
+- sbin: 4
+  name: IDD
+  pass_fail: F
+- sbin: 5
+  name: DC_LEVEL
+  pass_fail: F
+- sbin: 6
+  name: FUNCTIONAL
+  pass_fail: F
+- sbin: 7
+  name: SPEED
+  pass_fail: F
+- sbin: 8
+  name: MEMORY
+  pass_fail: F
+- sbin: 9
+  name: OTHER
+  pass_fail: F
+hard_bins:
+- hbin: 1
+  name: BIN1_PASS
+- hbin: 2
+  name: BIN2_CONT
+- hbin: 3
+  name: BIN3_LEAK
+- hbin: 4
+  name: BIN4_IDD
+- hbin: 5
+  name: BIN5_DC
+- hbin: 6
+  name: BIN6_FUNC
+- hbin: 7
+  name: BIN7_SPEED
+- hbin: 8
+  name: BIN8_MEM
+- hbin: 9
+  name: BIN9_OTHER
+rules:
+- sbin: 1
+  hbin: 1
+- sbin: 2
+  hbin: 2
+- sbin: 3
+  hbin: 3
+- sbin: 4
+  hbin: 4
+- sbin: 5
+  hbin: 5
+- sbin: 6
+  hbin: 6
+- sbin: 7
+  hbin: 7
+- sbin: 8
+  hbin: 8
+- sbin: 9
+  hbin: 9
+bin_priority:
+- 9
+- 7
+- 6
+- 5
+- 4
+- 3
+- 2
+fail_code_bins:
+  '2': 2
+  '3': 3
+  '4': 4
+  '5': 5
+  '6': 6
+  '7': 7
+  '8': 8
+  '99': 9

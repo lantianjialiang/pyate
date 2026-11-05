@@ -40,7 +40,7 @@ src = ["src", "tests", "tools"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
 ignore = ["E501", "B008", "RUF012"]
-allowed-confusables = ["，", "×"]
+allowed-confusables = ["，", "×", "–"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "SIM117"]

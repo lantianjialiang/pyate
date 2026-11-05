@@ -104,6 +104,7 @@ class TestItem(ABC):
     # ------------------------------------------------------------------ hooks
     def setup(self, ctx: SiteContext, hal: HALBackend) -> None:
         """Prepare instruments before ``execute`` (optional)."""
+        return None
 
     @abstractmethod
     def execute(self, ctx: SiteContext, hal: HALBackend) -> list[TestResult]:
@@ -111,6 +112,7 @@ class TestItem(ABC):
 
     def cleanup(self, ctx: SiteContext, hal: HALBackend) -> None:
         """Release instruments after ``execute`` (always called)."""
+        return None
 
     # ---------------------------------------------------------------- helpers
     def make_result(

@@ -68,7 +68,16 @@ def main() -> int:
     configs = DIST / "configs"
     if configs.exists():
         shutil.rmtree(configs)
-    shutil.copytree(ROOT / "configs", configs)
+    # run artifacts under configs/*/out belong to the developer machine
+    shutil.copytree(ROOT / "configs", configs,
+                    ignore=shutil.ignore_patterns("out", "__pycache__", "*.pyc"))
+    example_plugins = ROOT / "examples" / "plugins"
+    if example_plugins.is_dir():
+        plugins = DIST / "examples" / "plugins"
+        if plugins.exists():
+            shutil.rmtree(plugins)
+        shutil.copytree(example_plugins, plugins,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"))
     for name in ("使用说明.txt", "启动界面.bat"):
         shutil.copy2(ROOT / "packaging" / name, DIST / name)
     print(f"standalone folder: {DIST}")

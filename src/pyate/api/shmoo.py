@@ -60,7 +60,7 @@ def shmoo_csv(data: Mapping[str, Any] | None) -> str:
     # into a blank line between every row.
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow([f"{normal['y_label']}\\{normal['x_label']}", *normal["x"]])
-    for y_value, row in zip(normal["y"], normal["pass"]):
+    for y_value, row in zip(normal["y"], normal["pass"], strict=True):
         writer.writerow([y_value, *(1 if cell else 0 for cell in row)])
     return buffer.getvalue()
 
@@ -70,11 +70,18 @@ def run_shmoo(
     *,
     site: int = 1,
     params: dict[str, Any] | None = None,
+    nominal: bool = True,
 ) -> dict[str, Any]:
     """Run the shmoo item once on ``site`` and return a plot payload.
 
     Uses the session DUT, levels and pattern files. It does not walk the wafer
     or the handler, so a characterization plot stays cheap.
+
+    ``nominal`` (the default) builds the DUT without the die-to-die process
+    draw, so the plot is the *nominal* part described by ``dut_profile.yaml``
+    and does not change when ``run.seed`` changes. A wafer run instantiates one
+    DUT per die, each with its own ``vth_shift``, so its per-die plots scatter
+    around this one instead of matching it exactly.
     """
     from ..config.validators import resolve_pattern_path
     from ..dut.registry import create_dut
@@ -85,7 +92,8 @@ def run_shmoo(
 
     loaded = session.load()
     hal = SimulatedHAL.from_session(loaded, site_count=max(1, int(site)))
-    dut = create_dut(loaded.dut_profile, seed=int(loaded.run.seed), sample_yield=False)
+    dut = create_dut(loaded.dut_profile, seed=int(loaded.run.seed), sample_yield=False,
+                     variation=not nominal)
     dut.set_temperature(loaded.temperature())
     hal.bind_dut(int(site), dut)
     vdd = float(loaded.levels_for().vdd.nom)

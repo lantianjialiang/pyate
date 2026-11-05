@@ -6,6 +6,7 @@ import gzip
 import math
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -113,7 +114,7 @@ class StdfWriter:
         self.path = Path(str(path) + (".gz" if gzip_output and not str(path).endswith(".gz") else ""))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._pending_path = self.path.with_name(self.path.name + ".partial")
-        raw: BinaryIO = open(self._pending_path, "wb")
+        raw: BinaryIO = open(self._pending_path, "wb")  # noqa: SIM115 - owned until close(), across records
         self._handle: BinaryIO | gzip.GzipFile = gzip.GzipFile(fileobj=raw, mode="wb") if gzip_output else raw
         self._raw = raw
         self.endian = "little" if byte_order == "little" else "big"
@@ -432,10 +433,8 @@ class StdfWriter:
         })
         self._closed = True
         self._handle.close()
-        try:
+        with suppress(Exception):  # pragma: no cover - raw stream may already be closed
             self._raw.close()
-        except Exception:  # pragma: no cover
-            pass
         replace_atomic(self._pending_path, self.path)
         return self.path
 

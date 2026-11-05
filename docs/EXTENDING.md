@@ -37,25 +37,46 @@ class Plugin:
 
 按顺序尝试三种发现方式：
 
-1. **entry points**：包 `pyproject.toml` 里声明
+1. **entry points**：包 `pyproject.toml` 里声明（`pip install -e .` 后自动可见）
 
    ```toml
    [project.entry-points."pyate.plugins"]
    my_plugin = "my_plugin:Plugin"
    ```
 
-2. **目录扫描**：`PYATE_PLUGINS` 环境变量或 `plugin_dirs` 指向的目录，里面的
-   `pyate_plugin_*` 包/模块会被导入。
-3. **显式加载**：`pyate.api.Session` 的 `plugins=[...]`。
+2. **目录扫描**：环境变量 `PYATE_PLUGIN_PATH` 指向一个或多个目录（Windows 用 `;`
+   分隔），目录里的 `*.py` 与包目录都会被导入，不用安装：
+
+   ```powershell
+   $env:PYATE_PLUGIN_PATH = "examples/plugins"
+   pyate plugin list
+   ```
+
+3. **代码里显式加载**：`pyate.plugins.load_plugins([...])` 或
+   `PluginManager().load_file(path)`，适合单元测试。
+
+> 只实现了 hook 方法但忘了 `@hookimpl` 是最常见的坑，加载器会把它记到 `warnings` 里，
+> `pyate plugin list` 会直接打印出来。
+
+### 在 GUI 里管理
+
+最后一个 **Plugins** 页（菜单 Tools → Plugins...）列出了已加载插件与磁盘上还没加载的插件：
+
+- 选中已加载插件 → **Disable / Enable**：`PluginManager.unload()` 会 unregister 钩子，
+  并把它在 `pyate_register` 里注册的 DUT 模型 / test item / sink 从注册表撤回（同名覆盖时恢复原实现），
+  `enable()` 再加回来。停用对**下一次运行**生效。
+- 模块导入时用 `@register_testitem` / `@register_dut` 装饰器注册的类也会被算作该插件的贡献
+  （加载器按 `cls.__module__` 认领），所以禁用后它们同样消失。
+- **Load file... / Load folder...** 走 `load_file` / `load_dir`，目录里 `pyproject.toml` +
+  `<name>/__init__.py` 这种项目布局也会被识别。
+- 对应的 api 在 `pyate.api`：`plugin_report()`、`scan_plugins()`、`load_plugin(path)`、
+  `set_plugin_enabled(name, enabled)`、`reload_plugins()`。
 
 脚手架空包：
 
 ```bash
 pyate plugin new my_plugin --dir examples/plugins
 ```
-
-> 只实现了 hook 方法但忘了 `@hookimpl` 是最常见的坑，加载器会把它记到 `warnings` 里，
-> 可以用 `pyate.plugins.loader.PluginManager(...).info()` 看到。
 
 ### 全部 hook
 
@@ -197,5 +218,5 @@ pyate stdf verify out/<run>/LOT-XXX_W01_CP1.stdf
 ```
 
 插件的单元测试可以直接照抄 `tests/unit/test_plugins.py` 的结构：用
-`PluginManager().load_module(...)` 加载，断言 `manager.loaded`、`registry.get("name")`，
-再跑一个小 flow 检查结果。
+`PluginManager().load_module(...)` 加载，断言 `manager.loaded` 与
+`manager.registry.summary()`，再跑一个小 flow 检查结果。

@@ -324,3 +324,177 @@ def test_bundled_adc_example_registers_dut_and_items() -> None:
 def test_bundled_json_sink_example_registers_sink() -> None:
     manager = PluginManager().load_all([EXAMPLE_PLUGINS / "plugin_json_sink"])
     assert "json" in manager.registry.summary()["sinks"]
+
+
+@pytest.mark.skipif(not EXAMPLE_PLUGINS.is_dir(), reason="example plugins not shipped")
+def test_failwatch_example_is_a_loadable_single_file_plugin() -> None:
+    manager = PluginManager().load_all([EXAMPLE_PLUGINS])
+    assert "failwatch" in manager.loaded
+    assert any("failwatch" in text for text in manager.registry.messages)
+
+
+def test_plugin_list_command_reports_the_environment_path(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    from pyate.cli.main import main
+
+    _write_plugin(tmp_path, _plugin_source())
+    monkeypatch.setenv("PYATE_PLUGIN_PATH", str(tmp_path))
+    reset_manager()
+    assert main(["plugin", "list"]) == 0
+    out = capsys.readouterr().out
+    assert "PYATE_PLUGIN_PATH=" in out
+    assert "acme_plugin" in out
+    assert "testitems: tiny_item" in out
+    reset_manager()
+
+# ------------------------------------------------------------------ management
+def _documented_source(api_version: str = API_VERSION) -> str:
+    """Plugin with a module docstring so the GUI can show a description."""
+    return f'''
+    """Reference plugin for the unit tests."""
+
+    from pyate.plugins import hookimpl
+    from pyate.testitems.base import TestItem, TestItemParams
+
+
+    class TinyItem(TestItem):
+        name = "tiny_item"
+        Params = TestItemParams
+        description = "returns one trivial result"
+
+        def execute(self, ctx, hal):
+            return [self.make_result(ctx, value=1.0, unit="V")]
+
+
+    class Plugin:
+        @hookimpl
+        def pyate_api_version(self):
+            return "{api_version}"
+
+        @hookimpl
+        def pyate_register(self, registry):
+            registry.add_testitem("tiny_item", TinyItem)
+            registry.note("documented plugin loaded")
+    '''
+
+
+def _shadow_source() -> str:
+    """Plugin replacing a builtin test item, to prove unload restores it."""
+    return '''
+    from pyate.plugins import hookimpl
+    from pyate.testitems.base import TestItem, TestItemParams
+
+
+    class ShadowItem(TestItem):
+        name = "idd_static"
+        Params = TestItemParams
+
+        def execute(self, ctx, hal):
+            return [self.make_result(ctx, value=0.0, unit="A")]
+
+
+    class Plugin:
+        @hookimpl
+        def pyate_register(self, registry):
+            registry.add_testitem("idd_static", ShadowItem)
+    '''
+
+
+def test_scan_candidates_describes_plugins_without_importing() -> None:
+    from pyate.plugins.discovery import scan_candidates
+
+    found = {entry.name: entry for entry in scan_candidates([EXAMPLE_PLUGINS])}
+    assert {"failwatch", "plugin_adc_dut", "plugin_json_sink"} <= set(found)
+    adc = found["plugin_adc_dut"]
+    assert adc.kind == "package"
+    assert "ADC DUT model" in adc.doc
+    assert "pyate_register" in adc.hooks
+    assert found["failwatch"].kind == "file"
+
+
+def test_scan_candidates_finds_src_layout_projects(tmp_path: Path) -> None:
+    from pyate.plugins.discovery import scan_candidates
+
+    project = tmp_path / "my_plugin"
+    package = project / "my_plugin"
+    package.mkdir(parents=True)
+    (project / "pyproject.toml").write_text("[project]\nname='my_plugin'\n", encoding="utf-8")
+    (package / "__init__.py").write_text('"""My plugin."""\n', encoding="utf-8")
+    found = scan_candidates([tmp_path])
+    assert [entry.name for entry in found] == ["my_plugin"]
+    assert found[0].path == package
+
+
+def _managed_source() -> str:
+    """Plugin with its own item name, so other tests cannot pollute the check."""
+    return f'''
+    from pyate.plugins import hookimpl
+    from pyate.testitems.base import TestItem, TestItemParams
+
+
+    class ManagedItem(TestItem):
+        name = "managed_item"
+        Params = TestItemParams
+
+        def execute(self, ctx, hal):
+            return [self.make_result(ctx, value=1.0, unit="V")]
+
+
+    class Plugin:
+        @hookimpl
+        def pyate_api_version(self):
+            return "{API_VERSION}"
+
+        @hookimpl
+        def pyate_register(self, registry):
+            registry.add_testitem("managed_item", ManagedItem)
+    '''
+
+
+def test_unload_removes_hooks_and_registrations(tmp_path: Path) -> None:
+    from pyate.testitems.registry import is_registered
+
+    _write_plugin(tmp_path, _managed_source(), name="managed_plugin")
+    manager = PluginManager().load_all([tmp_path])
+    assert "managed_plugin" in manager.loaded
+    assert is_registered("managed_item")
+    assert manager.describe()[0]["contributions"] == ["testitem:managed_item"]
+
+    assert manager.unload("managed_plugin")
+    assert "managed_plugin" not in manager.loaded
+    assert manager.call("pyate_api_version") == []
+    assert not is_registered("managed_item")
+    assert manager.describe()[0]["enabled"] is False
+
+    assert manager.enable("managed_plugin")
+    assert is_registered("managed_item")
+    assert manager.describe()[0]["enabled"] is True
+
+
+def test_unload_restores_a_name_the_plugin_shadowed(tmp_path: Path) -> None:
+    from pyate.testitems.registry import get_testitem_class
+
+    builtin = get_testitem_class("idd_static")
+    _write_plugin(tmp_path, _shadow_source(), name="shadow_plugin")
+    manager = PluginManager().load_all([tmp_path])
+    assert get_testitem_class("idd_static") is not builtin
+    manager.unload("shadow_plugin")
+    assert get_testitem_class("idd_static") is builtin
+
+
+def test_api_plugin_report_and_toggle(tmp_path: Path) -> None:
+    from pyate.api import load_plugin, plugin_report, scan_plugins, set_plugin_enabled
+
+    _write_plugin(tmp_path, _documented_source(), name="documented_plugin")
+    report = load_plugin(tmp_path)
+    assert report["loaded_now"] is True
+    assert [entry["name"] for entry in report["plugins"]] == ["documented_plugin"]
+    assert report["plugins"][0]["contributions"] == ["testitem:tiny_item"]
+    assert report["plugins"][0]["doc"] == "Reference plugin for the unit tests."
+    assert any(entry["name"] == "documented_plugin" for entry in scan_plugins([tmp_path]))
+
+    report = set_plugin_enabled("documented_plugin", False)
+    assert report["changed"] is True
+    assert report["plugins"][0]["enabled"] is False
+    assert report["registry"]["testitems"] == []
+    assert plugin_report()["plugins"][0]["enabled"] is False

@@ -212,7 +212,7 @@ class _Parser:
                     f"pin '{base}': expected {len(names)} state character(s), got {len(raw)}",
                     stmt.line, stmt.source,
                 )
-            for name, char in zip(names, raw):
+            for name, char in zip(names, raw, strict=True):
                 if name in states:
                     raise ParseError(f"pin '{name}' assigned twice", stmt.line, stmt.source)
                 states[name] = char

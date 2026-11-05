@@ -11,10 +11,11 @@ pip install -e ".[dev]"           # dev 里含 PySide6，GUI 测试也能跑
 pyate version
 ```
 
-仓库自带两套示例配置，不需要额外文件：
+仓库自带几套示例配置，不需要额外文件：
 
 - `configs/demo_cp/`：300 mm wafer、4 sites、counter + shift register DUT
 - `configs/demo_ft/`：Handler、tray、重测、contact fail
+- `configs/demo_shmoo/`：1 site、小晶圆、慢速 DUT，专门演示 shmoo（VDD × period）
 - `configs/demo_batch/`：温度 × DUT profile 的笛卡尔积扫参
 
 ## 1. 先校验配置
@@ -146,14 +147,22 @@ bin pareto 与 Cpk 表，比逐个跑再手工汇总省事。
 pyate gui
 ```
 
-页签顺序就是工作流：Config（打开/校验）→ TestFlow（勾选启停）→ Limits/Bins（改 limit）
-→ Run（跑、看 datalog / wafer map / bin bar）→ Batch → Pattern。
+页签顺序就是工作流：Config（打开/校验）→ TestFlow（勾选启停、上下移动）→ Limits/Bins（改 limit）
+→ Run（跑、看 datalog / wafer map / bin bar / shmoo）→ Pattern → STDF →
+Plugins（加载/启停插件，看它们注册了什么）。
 
 几个常用操作：
 
 - 打开 `configs/demo_cp/session.yaml`，Run 页签点 **Start**，右侧 wafer map 实时按 bin 上色。
 - **Export wafer map PNG** 导出图片（自动按 wafer 直径与 die 尺寸缩放）。
-- View 菜单切换 dark/light。
+- 想看 shmoo：`pyate gui configs/demo_shmoo/session.yaml`，Run 页 → **Shmoo** 子页 → **Run shmoo**。
+  它沿用 flow 里 shmoo 项的 VDD/period 范围和网格（页面上方写着用的哪份配置），用的是标称 die，
+  所以和整轮里"中间那颗"一致；**PNG** / **CSV** 可导出。
+- 只想验证一项：TestFlow 里选中它，右下 **run one item** → **Run selected item**。只跑这一项，
+  结果出现在 Run 页的 datalog 和 Summary，不勾 wafer、不写 STDF。
+- 想在某项之前停下来：Run 页 **break at** 选测试项 → **Arm** → **Start**；停下后 `state: paused`，
+  点 **Resume** 会一直跑完（断点只命中一次）。**Step** 是跑一项再停。
+- View 菜单切换 dark/light（默认 light，当前主题带勾）。
 - Pattern 页签可以不改配置直接跑 `.pat`，用来调向量。
 
 ## 8. 下一步

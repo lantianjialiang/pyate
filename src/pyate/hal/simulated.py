@@ -440,7 +440,7 @@ class SimulatedHAL(HALBackend):
 
     def self_check(self) -> list[str]:
         problems: list[str] = []
-        for site_id, resources in self._sites.items():
+        for site_id in self._sites:
             if self._duts.get(site_id) is None:
                 problems.append(f"site {site_id}: no DUT bound")
             if not self._pin_maps.get(site_id):

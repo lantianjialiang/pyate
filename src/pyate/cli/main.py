@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -404,6 +405,29 @@ def cmd_plugin_new(args: argparse.Namespace) -> int:
     return _EXIT_OK
 
 
+def cmd_plugin_list(args: argparse.Namespace) -> int:
+    """``pyate plugin list``: what got loaded and what it registered."""
+    from ..plugins import ENV_PLUGIN_PATH, get_manager
+
+    manager = get_manager()
+    info = manager.info()
+    if args.json:
+        print(json.dumps(info, indent=2, ensure_ascii=False))
+        return _EXIT_OK
+    print(f"api {info['api_version']}   policy {info['policy']}")
+    print(f"{ENV_PLUGIN_PATH}=" + (os.environ.get(ENV_PLUGIN_PATH) or "(not set)"))
+    print("loaded: " + (", ".join(info["loaded"]) or "none"))
+    for section, names in info["registry"].items():
+        if names:
+            print(f"{section}: " + ", ".join(names))
+    for label in ("rejected", "warnings", "errors"):
+        for message in info[label]:
+            print(f"{label}: {message}")
+    for message in info.get("messages", []):
+        print(f"note: {message}")
+    return _EXIT_OK
+
+
 def cmd_version(_args: argparse.Namespace) -> int:
     """``pyate version``"""
     print(f"pyate {__version__}")
@@ -520,6 +544,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_new.add_argument("--dir", help="parent directory")
     p_new.add_argument("--force", action="store_true")
     p_new.set_defaults(func=cmd_plugin_new)
+    p_list = plugin_sub.add_parser("list", help="show loaded plugins and what they add")
+    p_list.add_argument("--json", action="store_true")
+    p_list.set_defaults(func=cmd_plugin_list)
 
     version = sub.add_parser("version", help="print the version")
     version.set_defaults(func=cmd_version)

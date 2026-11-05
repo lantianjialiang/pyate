@@ -13,6 +13,8 @@ __all__ = [
     "is_registered",
     "list_testitems",
     "register_testitem",
+    "registered_testitem",
+    "unregister_testitem",
 ]
 
 _REGISTRY: dict[str, type[TestItem]] = {}
@@ -55,6 +57,16 @@ def is_registered(name: str) -> bool:
     """True when ``name`` is a known item."""
     _ensure_builtins()
     return name in _REGISTRY
+
+
+def registered_testitem(name: str) -> type[TestItem] | None:
+    """The class currently registered under ``name`` (``None`` when absent)."""
+    return _REGISTRY.get(name)
+
+
+def unregister_testitem(name: str) -> type[TestItem] | None:
+    """Drop an item registration (used when a plugin is disabled)."""
+    return _REGISTRY.pop(name, None)
 
 
 def list_testitems() -> list[str]:

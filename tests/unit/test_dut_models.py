@@ -168,6 +168,24 @@ def test_composite_runs_counter_and_shift_block() -> None:
     assert outputs["S0"] == 1
 
 
+def test_composite_passes_electrical_params_to_its_blocks() -> None:
+    """``base_period_ns`` / ``vth_v`` must not be swallowed by the wrapper.
+
+    ``CompositeModel.min_period_ns`` is the slowest block, so a profile that
+    asks for a slower (or lower-Vt) part has to reach ``CounterModel`` and
+    ``ShiftRegModel``; otherwise every composite DUT runs at 12 ns / 2.0 V
+    no matter what ``dut_profile.yaml`` says.
+    """
+    plain = CompositeModel({}, None)
+    slow = CompositeModel({"base_period_ns": 30.0, "vth_v": 2.55}, None)
+    assert slow._counter.params["base_period_ns"] == 30.0
+    assert slow._counter.params["vth_v"] == 2.55
+    assert slow._shift.params["base_period_ns"] == 30.0
+    assert slow.min_period_ns(3.3) > plain.min_period_ns(3.3)
+    # heading towards the threshold the slow part needs much longer
+    assert slow.min_period_ns(2.75) > 2 * slow.min_period_ns(3.3)
+
+
 # ---------------------------------------------------------------- analog / power
 def test_power_off_clears_outputs_and_blocks_function() -> None:
     dut = CounterModel({"bits": 4}, None)

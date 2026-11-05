@@ -73,7 +73,7 @@ def test_unknown_item_raises() -> None:
 
 
 def test_params_schema_rejects_unknown_keys() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         create_testitem("continuity", 1, {"not_a_parameter": 1})
 
 
@@ -228,7 +228,7 @@ def test_user_code_calls_a_real_function(rig, tmp_path, monkeypatch) -> None:
 def test_user_code_reports_an_unresolvable_callable(rig) -> None:
     _session, hal, _dut, ctx = rig
     item = create_testitem("user_code", 1, {"callable": "no.such.function"})
-    with pytest.raises(Exception):
+    with pytest.raises(ModuleNotFoundError):
         item.execute(ctx, hal)
 
 
@@ -268,6 +268,36 @@ def test_shmoo_summarises_a_two_by_two_grid(rig) -> None:
     assert {cell["vdd"] for cell in payload["cells"]} == {2.7, 3.6}
 
 
+def test_demo_shmoo_config_shows_a_timing_boundary() -> None:
+    """The shipped ``demo_shmoo`` must plot a real shmoo, not a solid block.
+
+    A shmoo is only useful when the pass region has an edge: short periods
+    fail, long periods pass, and the edge moves with VDD. This also guards the
+    composite DUT forwarding ``base_period_ns`` / ``vth_v`` to its blocks.
+    """
+    from pyate.api import Session, run_shmoo
+
+    path = CONFIGS / "demo_shmoo" / "session.yaml"
+    config = load_session(path)
+    params = next(dict(node.params) for node in config.program.flow(config.run.stage)
+                  if node.item == "shmoo")
+    data = run_shmoo(Session(path), params=params)
+    matrix = data["pass"]
+    vdd = data["y"]
+    assert 0 < data["pass_rate"] < 100
+    # every live row reads fail...fail, pass...pass: at some period it makes it
+    for row in matrix:
+        assert row == sorted(row), row
+        if any(row):
+            assert row[0] is False and row[-1] is True, row
+    # below the DUT's minimum supply nothing works, above it most cells do
+    assert not any(matrix[0])
+    assert sum(matrix[-1]) > len(matrix[-1]) // 2
+    # the boundary moves the right way: more VDD -> the edge comes earlier
+    edges = {float(v): row.index(True) for v, row in zip(vdd, matrix, strict=True) if any(row)}
+    assert edges[3.6] < edges[3.1] < edges[2.75]
+
+
 # ------------------------------------------------------------------ limits
 def test_limits_table_prefers_the_specific_row() -> None:
     session = load_session(CONFIGS / "demo_cp" / "session.yaml")
@@ -279,3 +309,36 @@ def test_limits_table_prefers_the_specific_row() -> None:
     assert row.hi == pytest.approx(260e-6)
     assert table.lookup(999999) is None
     assert table.all_for(2000)
+
+def test_the_shmoo_button_and_a_run_agree_on_the_same_die() -> None:
+    """The quick shmoo must not be a different experiment than the flow's.
+
+    ``run_shmoo`` (Run → Shmoo) and a single item run (TestFlow → Run selected
+    item) both use the nominal die, so with the flow's own grid they must
+    produce exactly the same pass rate. They used to differ because the GUI
+    overrode the grid with its spin box defaults and because the DUT was built
+    with a random ``vth_shift``.
+    """
+    from pyate.api import Session, run_item, run_shmoo
+
+    path = CONFIGS / "demo_shmoo" / "session.yaml"
+    config = load_session(path)
+    params = next(dict(node.params) for node in config.program.flow(config.run.stage)
+                  if node.item == "shmoo")
+    plot = run_shmoo(Session(path), params=params)
+    single = run_item(Session(path), name="shmoo", test_num=9100)
+    assert single.values[0]["value"] == pytest.approx(plot["pass_rate"])
+    assert (len(plot["y"]), len(plot["x"])) == (21, 31)
+
+
+def test_run_shmoo_ignores_the_run_seed() -> None:
+    """A nominal die characterizes the same part whatever ``run.seed`` is."""
+    from pyate.api import Session, run_shmoo
+
+    path = CONFIGS / "demo_shmoo" / "session.yaml"
+    params = {"vdd_steps": 6, "period_steps": 6, "cycles": 8}
+    first = run_shmoo(Session(path), params=params)
+    session = Session(path)
+    session.update({"run.seed": 4242})
+    second = run_shmoo(session, params=params)
+    assert first["pass"] == second["pass"]

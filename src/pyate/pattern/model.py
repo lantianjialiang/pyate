@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Union
+from typing import Any
 
 __all__ = [
     "FailCycle",
@@ -97,7 +97,7 @@ class LabelOp:
     name: str
 
 
-Instruction = Union[VectorOp, JumpOp, LoopStartOp, LoopEndOp, HaltOp, LabelOp]
+Instruction = VectorOp | JumpOp | LoopStartOp | LoopEndOp | HaltOp | LabelOp
 
 
 @dataclass

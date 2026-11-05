@@ -129,3 +129,119 @@ datalog 里 `0.2496411896983` 这种满屏长小数、配置树 `value` 列一�
 `uph` 标签被拿去显示 bins 三个问题）。代价是截图脚本要跑一次完整 GUI 初始化，
 因此 demo run 只跑 `lot.wafers=["W01"]`、2 site，并把产物写到 `out/gui_shots`
 （只截界面时不加 `--run`）。
+
+## D23 GUI 去掉 Batch 页，批量能力留在命令行
+Batch 页只是 `batch.yaml` 的进度表，配置和产物都在命令行侧，页面本身没有不可替代的
+操作；它在界面里反而把「一套配置跑一轮」的主线拉长。因此 `BatchPanel`、`BatchViewModel`、
+File → Open batch 一并删除，页签变成 Config / TestFlow / Limits/Bins / Run / Pattern / STDF。
+`batch` 引擎、`api.batch`、`pyate batch run|status|report` 全部保留，E2E-BATCH 验收不受影响。
+
+## D24 composite 的子块必须继承同一组电气参数
+`CompositeModel.min_period_ns` 取两个子块中较慢的一个，但子块是 `CounterModel` /
+`ShiftRegModel` 自己 `new` 出来的，早期只传了 `bits`，于是 `dut_profile.params` 里的
+`base_period_ns` / `vth_v` 对 composite 完全无效（永远按 12 ns、2.0 V 算），配置改不动
+速度边界。现在把父模型的 `params`（除 `bits`）原样下传，和已有的 `set_temperature` /
+`apply_process_variation` 下传方式一致。现有示例都没显式设置这两个键，默认值与子块
+默认值相同，故 demo_cp/demo_ft 的数字不变。
+
+## D25 demo_shmoo 的 shmoo 是「时序边界」而不是电平截断
+要让 shmoo 有一张像样的图，三个坑必须避开：
+1. **VOH/VOL 是绝对值**。默认 `voh: 2.8`、输出高电平 ≈ `VDD - 0.1`，所以 VDD < 2.9 V
+   时所有高电平比较都失败，图会出现一条与速度无关的竖墙。demo_shmoo 把 `voh/vol`
+   改成 2.0/0.4，让判失败的原因回到时序。
+2. **strobe 不能固定在中段**。`sample_time = min(compare, period)`，若 compare 固定
+   8 ns，低 VDD 下 `output_delay` 变大就会「未建立」而全红。demo_shmoo 把 compare 设成
+   500 ns（远超 period），采样点落在周期末尾，失败只来自 `period < min_period(vdd)`。
+3. **DUT 要足够慢**。`vth_v=2.55`、`base_period_ns=30` 让 `min_period` 从 3.6 V 的
+   21 ns 涨到 2.75 V 的 119 ns，边界斜着穿过 8–128 ns 的窗口；`vdd_min=2.72` 再给出
+   底部一整条「供电不足」的死区。
+另外 `yield.pass = 1.0`、无缺陷注入：图的形状只由时序决定，不会因为随机坏 die 变成
+一片红。每颗 die 的 `vth_shift` 仍按 `process.vth_sigma` 采样，所以 21 颗的 pass rate
+在 57.8–59.3% 之间小幅抖动，和真实硅片一致。
+
+## D26 Run shmoo 与整轮结果必须能对上
+早先的 **Run shmoo** 看起来"另跑了一个实验"，原因有三个，全部修掉：
+1. **网格被静默覆盖**。按钮把 V/T/cyc 三个 spin box（默认 12×12、16 cycle）盖在 flow 的
+   `vdd_steps` / `period_steps` / `cycles`（`demo_shmoo` 是 21×31、32）之上，于是图和整轮
+   分辨率不同、pass rate 也不同。现在打开 session 就把三个框填成 flow 那一项的值
+   （`RunPanel._sync_shmoo_controls`），色块上方写明 `配置 · stage · VDD 范围 · period 范围 ·
+   网格 · nominal die`；用户改这三个框才是主动改网格。
+2. **DUT 是随机 die**。`run_shmoo` 原来用 `create_dut(seed=run.seed)`，`vth_shift` 从
+   N(0, σ) 抽一次，等于凭空造了一颗"第 0 颗 die"；整轮里每颗 die 各有自己的 `vth_shift`，
+   所以边界必然不同。`create_dut` 新增 `variation=False`（不下传工艺抖动），
+   `run_shmoo` 默认用它 —— 表征看的应该是标称 die。
+3. **没有交代用的是哪个 stage**。`_flow_shmoo` 返回 `(stage, params)`，页面和日志都打印出来。
+现在 `demo_shmoo` 的 21×31 网格下，**Run shmoo** 与整轮里"中间那颗"一致（58.2%），
+21 颗 die 在 57.8–59.3% 之间小幅散开 —— 这就是工艺抖动该有的样子。
+`tests/component/test_testitems.py::test_the_shmoo_button_and_a_run_agree_on_the_same_die`
+把"同网格同 die 同结果"钉住。
+
+## D27 TestFlow 里单独跑一项：走 FlowExecutor，但只发 TEST_RESULT
+`Run selected item` 用与整轮完全相同的 `FlowExecutor._run_item`（limits CSV、on_fail、
+HALT 错误、TEST_START/TEST_RESULT/FLOW_STEP 全部复用），只是把 `program_nodes` 换成
+`[node]`。三个取舍：
+- **不发 PART_END**。只跑了 flow 的一段，`binning` 算出来的 bin 没有意义；发一个假 part
+  会污染 wafer map（(0,0) 那颗）和 parts/yield 计数。数据进 datalog 和 Summary 就够了，
+  `yield` 标签在 parts=0 时显示 `-` 而不是 `0.00 %`。
+- **标称 die**（`variation=False`，与 D26 一致），多 site 时每个 site 一颗独立实例。
+- **参数取表单当前值**，不要求先 Apply to node：调一个数就想看结果是最常见的动作。
+  文件不改写，所以关掉窗口也不会留下半套参数。
+`FlowExecutor.run_single` 是这次新加的公开入口（`_run_item` 本身仍是私有）。
+
+## D28 断点命中一次即消费，界面必须显示 paused
+原来的断点只发一行 `LOG`，没有状态显示；更糟的是它**每颗 die 都会命中同一个 test number**，
+点一次 Resume 马上又停在同一项，看起来像"没反应"。三处改动：
+1. `FlowExecutor` 命中后 `breakpoints.discard(test_num)`（one shot）。多 site 共用同一个 set，
+   一个 site 消费掉之后其它 site 直接走到 barrier 等它，整轮仍然是一起暂停/一起继续。
+2. 新增 `EventKind.BREAKPOINT`（`site/test_num/item`），`RunViewModel.paused_at` 保存最后一次
+   命中，Run 页把它显示成 `hit 9000 shmoo (site 1) - Resume to continue`。
+3. `state: running/paused/done/idle` + 按钮可用性随状态切换（Start 跑时禁用、Resume/Step 只在
+   paused 时可用），否则用户不知道"停下来"了。这段状态同步放在 `_tick()` 里、**不受**渲染节流
+   （`should_render`）控制，否则暂停瞬间界面还可能停在 `running`。
+断点选择从裸 spin box 换成可编辑下拉框，列出当前 stage 的 `test_num  item`；点击 datalog 行仍
+会把对应编号填进去。
+
+## D29 STDF 统计区改成卡片 + 芯片，并修正 PART_FLG 位
+原来是一个 6 行的 `QLabel` 长文本，信息全挤在一起。现在：路径、`lot/part/job/node/stage/temp`
+一行、六个指标块（parts/good/yield/retests/PTR/FTR）、hard/soft bin 芯片行、记录条数，
+用 `QFrame#card` 的浅底卡片承载（深浅主题各一套 QSS）。表格与图表区域因此多出一些高度。
+
+同时发现读取端用错了标志位：`stdf_view` 把 `TEST_FLG` fail 当 `0x02`、`PART_FLG` fail 当
+`0x02`，而 writer 按 `docs/STDF_MAPPING.md` 写的是 `TEST_FLG 0x80`、`PART_FLG 0x08`、
+`PART_FLG 0x10` = 未测、`0x01` = 重测。结果 STDF 页的 good/yield 永远是 100%。按文档改正后
+`demo_cp` 的 W01 显示 594/673 = 88.26%，和 run 汇总一致。
+
+## D30 菜单快捷键要预留宽度；主题默认浅色且可勾选
+给 `QMenu::item` 加 `padding: 5px 14px`。只设 `QMenu::item:selected` 时 Qt 的样式表代理
+按文本宽度算菜单宽度，没有把快捷键算进去，于是 `Open session...` 和 `Ctrl+O` 叠在一起
+（截图 `out/menu_a.png` 可复现）。加左右 padding 后宽度从 147 px 变成 164 px，两者分开。
+
+主题：所有入口（`MainWindow`、`create_window`、`pyate gui`、打包入口）默认 `light`；View 菜单
+改成互斥的可勾选项并反映当前主题，避免"看起来是深色、菜单里却没有勾"的状态。
+
+## D31 GUI 插件管理页：能列出、加载、启停，且停用要真的撤掉注册
+插件此前只能靠环境变量在启动时加载，界面上完全看不见，用户不知道 `examples/plugins/` 下
+那几个包是干什么的。新增第 7 个页签 **Plugins**（菜单 Tools → Plugins...），数据全部来自
+`pyate.api` 的新模块 `api/plugins.py`，GUI 不直接 import `plugins.*`。
+
+三处设计取舍：
+
+1. **扫描不 import**。`plugins/discovery.py` 用 `ast` 解析候选文件，只读 docstring 第一行、
+   `__version__` 和被 `@hookimpl` 装饰的钩子名。这样"列出磁盘上有什么"不会执行第三方代码。
+   识别三种布局：单文件、包目录、`pyproject.toml` + `<name>/__init__.py` 的项目目录；
+   `load_dir` 也补上了第三种，否则 GUI 里点 `examples/plugins` 只会加载 `failwatch.py`。
+2. **停用要撤销注册**。`PluginRegistry` 增加 `owners/previous`，`add_*` 时记录"谁注册的、
+   覆盖前是什么"；`remove_plugin(name)` 一并回滚（DUT 模型、test item 走全局注册表的
+   `unregister_*`，被覆盖时恢复原实现）。`PluginManager.unload/enable` 只做 pluggy 的
+   register/unregister + 这套回滚，`_register` 改成**逐个插件**调用 `pyate_register`，
+   否则无法归属贡献。停用只影响下一次 run（`RunController` 在构造时取 manager）。
+3. **导入期装饰器注册也算插件贡献**。`@register_testitem` 在 import 时就把类塞进全局注册表，
+   比 `pyate_register` 早；不做处理的话 ADC 插件的 `adc_inl_dnl` 在 disable 后仍然可用。
+   `_claim_imports()` 按 `cls.__module__` 前缀认领这些类，`previous` 记为 None，卸载时直接删除。
+
+顺带修了 `_check_versions` 的老问题：原来对每个插件都取"全局 hook 的第一个返回值"，导致
+一个插件报 9.0 会把所有插件都判成不兼容。现在用 `subset_hook_caller` 逐插件取版本。
+
+界面细节：表格列 `plugin / status / api / contributes / source`，选中行下方显示 doc 与注册清单；
+状态色 #35a86a / #d05c4c 在深浅主题都可读；`QTableWidget` 的 QSS 补了 `selection-color`
+（原先选中行保留单元格前景色，绿字压在浅蓝底上几乎看不见）。
