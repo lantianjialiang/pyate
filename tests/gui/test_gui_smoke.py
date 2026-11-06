@@ -521,7 +521,7 @@ def test_run_panel_shows_the_breakpoint_hit(qapp: QApplication) -> None:
 class _RunNow(threading.Thread):
     """``start()`` runs the body inline so a test does not have to poll."""
 
-    def start(self) -> None:  # noqa: D102 - Qt-free replacement
+    def start(self) -> None:  # Qt-free replacement for Thread.start
         self.run()
 
 

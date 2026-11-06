@@ -63,9 +63,8 @@ def scan_plugins(paths: list[str | Path] | None = None,
     entries: list[dict[str, Any]] = []
     for candidate in scan_candidates(list(paths) if paths else None):
         entry = known.get(candidate.name) or _match_by_source(known, candidate.path)
-        if entry is None:
-            state = "not loaded"
-        else:
+        state = "not loaded"
+        if entry is not None:
             state = "loaded" if entry.get("enabled") else "disabled"
         data = candidate.to_dict()
         data["loaded"] = state != "not loaded"
